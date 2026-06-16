@@ -1,9 +1,8 @@
 # ============================================================
-# Release Cut — Continue After Conflict Resolution  (v2)
+# Release Cut — Continue After Conflict Resolution
 # ============================================================
 # Run this ONLY when the back-merge had conflicts and the
 # conflict-resolution PR has been merged into develop.
-#
 # Use the EXACT same inputs as the original release-cut.yml run.
 # ============================================================
 
@@ -13,19 +12,23 @@ on:
   workflow_dispatch:
     inputs:
       prev_release_branch:
-        description: "Previous release branch  (e.g. release/2.01.0)"
+        description: "Previous release branch  (e.g. release-2.02.0-loki)"
+        required: true
+        type: string
+      prev_version:
+        description: "Previous release version number  (e.g. 2.02.0)"
         required: true
         type: string
       new_version:
-        description: "New release version  (e.g. 2.02.0)"
+        description: "New release version number  (e.g. 2.03.0)"
+        required: true
+        type: string
+      new_codename:
+        description: "New release codename  (e.g. minotaur)"
         required: true
         type: string
       new_version_label:
-        description: "New Jira fix-version label  (e.g. AEM 2.02.0 - Phoenix)"
-        required: true
-        type: string
-      prev_version_label:
-        description: "Previous Jira fix-version label  (e.g. AEM 2.01.0 - Kraken)"
+        description: "New Jira fix-version label  (e.g. AEM 2.03.0 - Minotaur)"
         required: true
         type: string
       jira_release_ticket:
@@ -39,12 +42,14 @@ on:
         type: boolean
 
 env:
-  NEW_RELEASE_BRANCH:  "release/${{ inputs.new_version }}"
+  NEW_RELEASE_BRANCH:  "release-${{ inputs.new_version }}-${{ inputs.new_codename }}"
   PREV_RELEASE_BRANCH: "${{ inputs.prev_release_branch }}"
   NEW_VERSION:         "${{ inputs.new_version }}"
+  PREV_VERSION:        "${{ inputs.prev_version }}"
   NEW_VERSION_LABEL:   "${{ inputs.new_version_label }}"
-  PREV_VERSION_LABEL:  "${{ inputs.prev_version_label }}"
-  NEW_PRERELEASE_TAG:  "pre-release/${{ inputs.new_version }}"
+  NEW_PRERELEASE_TAG:  "${{ inputs.new_version }}-beta"
+  PREV_LATEST_TAG:     "${{ inputs.prev_version }}"
+  PREV_PRERELEASE_TAG: "${{ inputs.prev_version }}-beta"
   DRY_RUN:             "${{ inputs.dry_run }}"
 
 jobs:
@@ -65,13 +70,13 @@ jobs:
           UNMERGED=$(git log HEAD..origin/"${{ env.PREV_RELEASE_BRANCH }}" --oneline)
           if [ -n "$UNMERGED" ]; then
             echo "::error::develop is missing commits from ${{ env.PREV_RELEASE_BRANCH }}"
-            echo "::error::Make sure the conflict-resolution PR is merged before running this."
+            echo "::error::Ensure the conflict-resolution PR is merged before running this."
             exit 1
           fi
           echo "✅ develop is up to date — safe to continue"
 
   cut_release_branch:
-    name: "2 · Cut ${{ inputs.new_version }} from develop"
+    name: "2 · Cut release-${{ inputs.new_version }}-${{ inputs.new_codename }} from develop"
     runs-on: ubuntu-latest
     needs: verify_develop
     steps:
@@ -83,13 +88,13 @@ jobs:
       - run: |
           git config user.name  "ADCMS Release Bot"
           git config user.email "adcms-bot@ibm.com"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] ${{ env.NEW_RELEASE_BRANCH }}" && exit 0
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: ${{ env.NEW_RELEASE_BRANCH }}" && exit 0
           git checkout -b "${{ env.NEW_RELEASE_BRANCH }}"
           git push origin "${{ env.NEW_RELEASE_BRANCH }}"
           echo "✅ Created: ${{ env.NEW_RELEASE_BRANCH }}"
 
   rotate_tags:
-    name: "3 · Rotate tags"
+    name: "3 · Delete ${{ inputs.prev_version }}-beta, create ${{ inputs.prev_version }} + ${{ inputs.new_version }}-beta"
     runs-on: ubuntu-latest
     needs: cut_release_branch
     env:
@@ -99,29 +104,33 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
-      - id: tags
+      - name: Delete previous pre-release tag (${{ env.PREV_PRERELEASE_TAG }})
         run: |
-          PREV_VER=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed 's|release/||')
-          echo "prev_prerelease_tag=pre-release/$PREV_VER" >> "$GITHUB_OUTPUT"
-          echo "prev_latest_tag=latest/$PREV_VER"          >> "$GITHUB_OUTPUT"
-          echo "prev_ver=$PREV_VER"                        >> "$GITHUB_OUTPUT"
-      - run: |
-          TAG="${{ steps.tags.outputs.prev_prerelease_tag }}"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] delete $TAG" && exit 0
+          TAG="${{ env.PREV_PRERELEASE_TAG }}"
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would delete: $TAG" && exit 0
           gh release delete "$TAG" --yes 2>/dev/null || true
           git push origin ":refs/tags/$TAG" 2>/dev/null || true
-      - run: |
-          TAG="${{ steps.tags.outputs.prev_latest_tag }}"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] create $TAG" && exit 0
-          gh release create "$TAG" --target "${{ env.PREV_RELEASE_BRANCH }}" \
-            --title "Release ${{ steps.tags.outputs.prev_ver }}" \
-            --notes "Stable release" --latest
-      - run: |
+          echo "✅ Deleted: $TAG"
+      - name: Create latest tag for previous release (${{ env.PREV_LATEST_TAG }})
+        run: |
+          TAG="${{ env.PREV_LATEST_TAG }}"
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: $TAG on ${{ env.PREV_RELEASE_BRANCH }}" && exit 0
+          gh release create "$TAG" \
+            --target "${{ env.PREV_RELEASE_BRANCH }}" \
+            --title  "Release ${{ env.PREV_VERSION }}" \
+            --notes  "Stable release — ${{ env.PREV_VERSION }}" \
+            --latest
+          echo "✅ Created: $TAG → ${{ env.PREV_RELEASE_BRANCH }}"
+      - name: Create pre-release tag for new release (${{ env.NEW_PRERELEASE_TAG }})
+        run: |
           TAG="${{ env.NEW_PRERELEASE_TAG }}"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] create $TAG" && exit 0
-          gh release create "$TAG" --target "${{ env.NEW_RELEASE_BRANCH }}" \
-            --title "Pre-release ${{ env.NEW_VERSION }}" \
-            --notes "Pre-release — ${{ env.NEW_VERSION_LABEL }}" --prerelease
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: $TAG on ${{ env.NEW_RELEASE_BRANCH }}" && exit 0
+          gh release create "$TAG" \
+            --target "${{ env.NEW_RELEASE_BRANCH }}" \
+            --title  "Pre-release ${{ env.NEW_VERSION }}" \
+            --notes  "Pre-release — ${{ env.NEW_VERSION_LABEL }}" \
+            --prerelease
+          echo "✅ Created: $TAG → ${{ env.NEW_RELEASE_BRANCH }}"
 
   adobe_cloud_manager:
     name: "4 · Adobe Cloud Manager"
@@ -137,7 +146,7 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "acm_token=$TOKEN" >> "$GITHUB_OUTPUT"
       - run: |
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] patch + trigger ACM" && exit 0
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would patch + trigger ACM pipeline" && exit 0
           PIPELINE=$(curl -s \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ secrets.ACM_ORG_ID }}" \
@@ -155,7 +164,7 @@ jobs:
             -H "Content-Type: application/json"
 
   jira_release:
-    name: "5 · Jira"
+    name: "5 · Jira — classify tickets, create filter, update release ticket"
     runs-on: ubuntu-latest
     needs: rotate_tags
     outputs:
@@ -172,11 +181,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          PREV_VER=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed 's|release/||')
-          COMMITS=$(git log "latest/$PREV_VER..${{ env.NEW_PRERELEASE_TAG }}" --pretty=format:"%s %b" 2>/dev/null \
+          PREV_TAG="${{ env.PREV_LATEST_TAG }}"
+          NEW_TAG="${{ env.NEW_PRERELEASE_TAG }}"
+          echo "Comparing $PREV_TAG → $NEW_TAG"
+          COMMITS=$(git log "${PREV_TAG}..${NEW_TAG}" --pretty=format:"%s %b" 2>/dev/null \
                     || git log "origin/${{ env.PREV_RELEASE_BRANCH }}..origin/${{ env.NEW_RELEASE_BRANCH }}" --pretty=format:"%s %b")
           TICKETS=$(echo "$COMMITS" | grep -oE 'ADCMS-[0-9]{4,}' | sort -u | tr '\n' ',')
           echo "raw_tickets=$TICKETS" >> "$GITHUB_OUTPUT"
+          echo "Raw tickets: $TICKETS"
       - id: classify
         run: node scripts/classify_tickets.js
         env:
@@ -185,7 +197,7 @@ jobs:
           JIRA_API_TOKEN:     ${{ secrets.JIRA_API_TOKEN }}
           RAW_TICKETS:        ${{ steps.extract.outputs.raw_tickets }}
           NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
-          PREV_VERSION_LABEL: ${{ env.PREV_VERSION_LABEL }}
+          PREV_VERSION_LABEL: ""
       - id: create_filter
         run: node scripts/update_jira_filter.js
         env:
@@ -240,8 +252,10 @@ jobs:
               \"attachments\": [{
                 \"color\": \"good\",
                 \"fields\": [
-                  {\"title\": \"Release branch\", \"value\": \"\`${{ env.NEW_RELEASE_BRANCH }}\`\", \"short\": true},
-                  {\"title\": \"Triggered by\",   \"value\": \"${{ github.actor }}\",              \"short\": true},
+                  {\"title\": \"New branch\",         \"value\": \"\`${{ env.NEW_RELEASE_BRANCH }}\`\",  \"short\": true},
+                  {\"title\": \"Pre-release tag\",    \"value\": \"\`${{ env.NEW_PRERELEASE_TAG }}\`\",  \"short\": true},
+                  {\"title\": \"Previous latest tag\",\"value\": \"\`${{ env.PREV_LATEST_TAG }}\` created on \`${{ env.PREV_RELEASE_BRANCH }}\`\", \"short\": false},
+                  {\"title\": \"Triggered by\",       \"value\": \"${{ github.actor }}\",               \"short\": true},
                   {\"title\": \"Note\", \"value\": \"Back-merge conflict was resolved manually before this run\", \"short\": false}
                 ]
               }]

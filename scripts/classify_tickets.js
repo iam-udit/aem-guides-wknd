@@ -21,7 +21,7 @@
  *   JIRA_USER_EMAIL
  *   JIRA_API_TOKEN
  *   RAW_TICKETS          comma-separated IDs from tag comparison
- *   NEW_VERSION_LABEL    e.g. "AEM 2.02.0 - Loki"
+ *   NEW_VERSION_LABEL    e.g. "AEM 2.02.0 - Phoenix"
  *   PREV_VERSION_LABEL   e.g. "AEM 2.01.0 - Kraken"
  */
 

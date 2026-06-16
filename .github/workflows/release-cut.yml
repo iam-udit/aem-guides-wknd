@@ -24,19 +24,23 @@ on:
   workflow_dispatch:
     inputs:
       prev_release_branch:
-        description: "Previous release branch  (e.g. release/2.01.0)"
+        description: "Previous release branch  (e.g. release-2.02.0-loki)"
+        required: true
+        type: string
+      prev_version:
+        description: "Previous release version number  (e.g. 2.02.0)"
         required: true
         type: string
       new_version:
-        description: "New release version  (e.g. 2.02.0)"
+        description: "New release version number  (e.g. 2.03.0)"
+        required: true
+        type: string
+      new_codename:
+        description: "New release codename  (e.g. minotaur)"
         required: true
         type: string
       new_version_label:
-        description: "New Jira fix-version label  (e.g. AEM 2.02.0 - Phoenix)"
-        required: true
-        type: string
-      prev_version_label:
-        description: "Previous Jira fix-version label  (e.g. AEM 2.01.0 - Kraken)"
+        description: "New Jira fix-version label  (e.g. AEM 2.03.0 - Minotaur)"
         required: true
         type: string
       jira_release_ticket:
@@ -50,12 +54,16 @@ on:
         type: boolean
 
 env:
-  NEW_RELEASE_BRANCH:  "release/${{ inputs.new_version }}"
+  # Branch naming: release-2.03.0-minotaur
+  NEW_RELEASE_BRANCH:  "release-${{ inputs.new_version }}-${{ inputs.new_codename }}"
   PREV_RELEASE_BRANCH: "${{ inputs.prev_release_branch }}"
   NEW_VERSION:         "${{ inputs.new_version }}"
+  PREV_VERSION:        "${{ inputs.prev_version }}"
   NEW_VERSION_LABEL:   "${{ inputs.new_version_label }}"
-  PREV_VERSION_LABEL:  "${{ inputs.prev_version_label }}"
-  NEW_PRERELEASE_TAG:  "pre-release/${{ inputs.new_version }}"
+  # Tag naming: 2.03.0-beta  (pre-release) and 2.02.0 (latest for prev)
+  NEW_PRERELEASE_TAG:  "${{ inputs.new_version }}-beta"
+  PREV_LATEST_TAG:     "${{ inputs.prev_version }}"
+  PREV_PRERELEASE_TAG: "${{ inputs.prev_version }}-beta"
   DRY_RUN:             "${{ inputs.dry_run }}"
 
 
@@ -88,7 +96,7 @@ jobs:
         id: merge
         run: |
           # Always work on a dedicated branch — we always raise a PR
-          PR_BRANCH="chore/back-merge-${{ env.PREV_RELEASE_BRANCH }}"
+          PR_BRANCH="chore/back-merge-${{ inputs.prev_release_branch }}"
           git fetch origin "${{ env.PREV_RELEASE_BRANCH }}"
           git checkout -b "$PR_BRANCH"
 
@@ -239,9 +247,14 @@ jobs:
 
 # ============================================================
 # JOB 3 — Rotate tags
+#
+# On release cut for 2.03.0-minotaur:
+#   DELETE  2.02.0-beta          (previous pre-release tag)
+#   CREATE  2.02.0               (latest tag for previous branch)
+#   CREATE  2.03.0-beta          (pre-release tag for new branch)
 # ============================================================
   rotate_tags:
-    name: "3 · Rotate tags (prev latest + new pre-release)"
+    name: "3 · Rotate tags — delete ${{ inputs.prev_version }}-beta, create ${{ inputs.prev_version }} + ${{ inputs.new_version }}-beta"
     runs-on: ubuntu-latest
     needs: cut_release_branch
     env:
@@ -254,43 +267,35 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Derive tag names
-        id: tags
+      - name: Delete previous pre-release tag (${{ env.PREV_PRERELEASE_TAG }})
         run: |
-          PREV_VER=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed 's|release/||')
-          echo "prev_prerelease_tag=pre-release/$PREV_VER" >> "$GITHUB_OUTPUT"
-          echo "prev_latest_tag=latest/$PREV_VER"          >> "$GITHUB_OUTPUT"
-          echo "prev_ver=$PREV_VER"                        >> "$GITHUB_OUTPUT"
-
-      - name: Delete previous pre-release tag
-        run: |
-          TAG="${{ steps.tags.outputs.prev_prerelease_tag }}"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would delete: $TAG" && exit 0
+          TAG="${{ env.PREV_PRERELEASE_TAG }}"
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would delete tag: $TAG" && exit 0
           gh release delete "$TAG" --yes 2>/dev/null || true
           git push origin ":refs/tags/$TAG"      2>/dev/null || true
-          echo "✅ Deleted: $TAG"
+          echo "✅ Deleted pre-release tag: $TAG"
 
-      - name: Create latest tag for previous release branch
+      - name: Create latest tag for previous release (${{ env.PREV_LATEST_TAG }})
         run: |
-          TAG="${{ steps.tags.outputs.prev_latest_tag }}"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: $TAG" && exit 0
+          TAG="${{ env.PREV_LATEST_TAG }}"
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}" && exit 0
           gh release create "$TAG" \
             --target "${{ env.PREV_RELEASE_BRANCH }}" \
-            --title  "Release ${{ steps.tags.outputs.prev_ver }}" \
-            --notes  "Stable release — ${{ steps.tags.outputs.prev_ver }}" \
+            --title  "Release ${{ env.PREV_VERSION }}" \
+            --notes  "Stable release — ${{ env.PREV_VERSION }}" \
             --latest
-          echo "✅ Created latest tag: $TAG"
+          echo "✅ Created latest tag: $TAG → ${{ env.PREV_RELEASE_BRANCH }}"
 
-      - name: Create pre-release tag for new release branch
+      - name: Create pre-release tag for new release (${{ env.NEW_PRERELEASE_TAG }})
         run: |
           TAG="${{ env.NEW_PRERELEASE_TAG }}"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: $TAG" && exit 0
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}" && exit 0
           gh release create "$TAG" \
             --target "${{ env.NEW_RELEASE_BRANCH }}" \
             --title  "Pre-release ${{ env.NEW_VERSION }}" \
             --notes  "Pre-release — ${{ env.NEW_VERSION_LABEL }}" \
             --prerelease
-          echo "✅ Created pre-release tag: $TAG"
+          echo "✅ Created pre-release tag: $TAG → ${{ env.NEW_RELEASE_BRANCH }}"
 
 
 # ============================================================
@@ -382,19 +387,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          PREV_VER=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed 's|release/||')
-          PREV_TAG="latest/$PREV_VER"
-          NEW_TAG="${{ env.NEW_PRERELEASE_TAG }}"
+          PREV_TAG="${{ env.PREV_LATEST_TAG }}"   # e.g. 2.02.0
+          NEW_TAG="${{ env.NEW_PRERELEASE_TAG }}"  # e.g. 2.03.0-beta
 
           echo "Comparing $PREV_TAG → $NEW_TAG"
 
           # Get all commit messages between the two tags
-          # Mirrors your browser JS: extracts all ADCMS-NNNN from commit messages
           COMMITS=$(git log "${PREV_TAG}..${NEW_TAG}" --pretty=format:"%s %b" 2>/dev/null \
                     || git log "origin/${{ env.PREV_RELEASE_BRANCH }}..origin/${{ env.NEW_RELEASE_BRANCH }}" \
                        --pretty=format:"%s %b")
 
-          # Replicate: new Set([...matches].flat().sort())
           TICKETS=$(echo "$COMMITS" \
             | grep -oE 'ADCMS-[0-9]{4,}' \
             | sort -u \
@@ -505,8 +507,9 @@ jobs:
               \"attachments\": [{
                 \"color\": \"${{ steps.status.outputs.color }}\",
                 \"fields\": [
-                  {\"title\": \"New release branch\",  \"value\": \"\`${{ env.NEW_RELEASE_BRANCH }}\`\",         \"short\": true},
-                  {\"title\": \"Pre-release tag\",     \"value\": \"\`${{ env.NEW_PRERELEASE_TAG }}\`\",         \"short\": true},
+                  {\"title\": \"New release branch\",  \"value\": \"\`${{ env.NEW_RELEASE_BRANCH }}\`\",          \"short\": true},
+                  {\"title\": \"Pre-release tag\",     \"value\": \"\`${{ env.NEW_PRERELEASE_TAG }}\`\",           \"short\": true},
+                  {\"title\": \"Previous latest tag\", \"value\": \"\`${{ env.PREV_LATEST_TAG }}\` created on \`${{ env.PREV_RELEASE_BRANCH }}\`\", \"short\": false},
                   {\"title\": \"Tickets in release\",  \"value\": \"${{ needs.jira_release.outputs.ticket_count }} confirmed tickets tagged to fix version\", \"short\": false},
                   {\"title\": \"Jira filter\",         \"value\": \"${{ needs.jira_release.outputs.filter_url }}\", \"short\": false},
                   {\"title\": \"Release ticket\",      \"value\": \"${{ inputs.jira_release_ticket }} description updated\", \"short\": false},
