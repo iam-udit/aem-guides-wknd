@@ -90,6 +90,9 @@ public class BylineImpl implements Byline {
          }
     }
 
+    /**
+     * Test changes related to ADCMS-2
+     */
     @Override
     public boolean isEmpty() {
         final Image image = getImage();
