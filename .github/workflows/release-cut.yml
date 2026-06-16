@@ -174,7 +174,7 @@ jobs:
         if: steps.merge.outputs.had_conflict == 'true' && env.DRY_RUN == 'false'
         run: node scripts/slack.js
         env:
-          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL:  ${{ vars.SLACK_WEBHOOK_URL }}
           NOTIFICATION_TYPE:  conflict
           NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
           PREV_RELEASE_BRANCH: ${{ env.PREV_RELEASE_BRANCH }}
@@ -187,7 +187,7 @@ jobs:
         if: steps.merge.outputs.had_conflict == 'false' && env.DRY_RUN == 'false'
         run: node scripts/slack.js
         env:
-          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL:  ${{ vars.SLACK_WEBHOOK_URL }}
           NOTIFICATION_TYPE:  clean_pr
           NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
           GITHUB_ACTOR:       ${{ github.actor }}
@@ -301,7 +301,7 @@ jobs:
             "https://ims-na1.adobelogin.com/ims/token/v3" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -d "grant_type=client_credentials" \
-            -d "client_id=${{ secrets.ACM_CLIENT_ID }}" \
+            -d "client_id=${{ vars.ACM_CLIENT_ID }}" \
             -d "client_secret=${{ secrets.ACM_CLIENT_SECRET }}" \
             -d "scope=openid,AdobeID,read_organizations,additional_info.projectedProductContext")
           TOKEN=$(echo "$RESPONSE" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).access_token))")
@@ -314,8 +314,8 @@ jobs:
 
           PIPELINE=$(curl -s \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
-            -H "x-gw-ims-org-id: ${{ secrets.ACM_ORG_ID }}" \
-            "https://cloudmanager.adobe.io/api/program/${{ secrets.ACM_PROGRAM_ID }}/pipeline/${{ secrets.ACM_PIPELINE_ID }}")
+            -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}")
 
           UPDATED=$(echo "$PIPELINE" | node -e "
             let d=''; process.stdin.on('data',c=>d+=c).on('end',()=>{
@@ -325,9 +325,9 @@ jobs:
             })")
 
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-            "https://cloudmanager.adobe.io/api/program/${{ secrets.ACM_PROGRAM_ID }}/pipeline/${{ secrets.ACM_PIPELINE_ID }}" \
+            "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}" \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
-            -H "x-gw-ims-org-id: ${{ secrets.ACM_ORG_ID }}" \
+            -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
             -H "Content-Type: application/json" \
             -d "$UPDATED")
 
@@ -339,9 +339,9 @@ jobs:
           [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would trigger stage build" && exit 0
 
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-            "https://cloudmanager.adobe.io/api/program/${{ secrets.ACM_PROGRAM_ID }}/pipeline/${{ secrets.ACM_PIPELINE_ID }}/execution" \
+            "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution" \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
-            -H "x-gw-ims-org-id: ${{ secrets.ACM_ORG_ID }}" \
+            -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
             -H "Content-Type: application/json")
 
           echo "Pipeline trigger → HTTP $HTTP_CODE"
@@ -396,8 +396,8 @@ jobs:
         id: classify
         run: node scripts/classify_tickets.js
         env:
-          JIRA_BASE_URL:       ${{ secrets.JIRA_BASE_URL }}
-          JIRA_USER_EMAIL:     ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_BASE_URL:       ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:     ${{ vars.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN:      ${{ secrets.JIRA_API_TOKEN }}
           RAW_TICKETS:         ${{ steps.extract.outputs.raw_tickets }}
           NEW_VERSION_LABEL:   ${{ env.NEW_VERSION_LABEL }}
@@ -407,18 +407,18 @@ jobs:
         id: create_filter
         run: node scripts/update_jira_filter.js
         env:
-          JIRA_BASE_URL:      ${{ secrets.JIRA_BASE_URL }}
-          JIRA_USER_EMAIL:    ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_BASE_URL:      ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:    ${{ vars.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN:     ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_PROJECT_KEY:   ${{ secrets.JIRA_PROJECT_KEY }}
+          JIRA_PROJECT_KEY:   ${{ vars.JIRA_PROJECT_KEY }}
           NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
           DRY_RUN:            ${{ env.DRY_RUN }}
 
       - name: Update release ticket description
         run: node scripts/update_release_ticket.js
         env:
-          JIRA_BASE_URL:          ${{ secrets.JIRA_BASE_URL }}
-          JIRA_USER_EMAIL:        ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_BASE_URL:          ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:        ${{ vars.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN:         ${{ secrets.JIRA_API_TOKEN }}
           JIRA_RELEASE_TICKET:    ${{ inputs.jira_release_ticket }}
           FILTER_URL:             ${{ steps.create_filter.outputs.filter_url }}
@@ -485,7 +485,7 @@ jobs:
       - name: Post summary to Slack
         run: node scripts/slack.js
         env:
-          SLACK_WEBHOOK_URL:    ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL:    ${{ vars.SLACK_WEBHOOK_URL }}
           NOTIFICATION_TYPE:    summary
           NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
           NEW_RELEASE_BRANCH:   ${{ env.NEW_RELEASE_BRANCH }}
