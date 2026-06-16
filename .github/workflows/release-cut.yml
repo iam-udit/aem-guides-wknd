@@ -1,0 +1,519 @@
+# ============================================================
+# Release Cut Workflow — ADCMS Team  (v2)
+# ============================================================
+# Trigger : Manual (workflow_dispatch) from GitHub Actions UI
+#
+# Secrets required (Repo → Settings → Secrets and variables → Actions):
+#
+#   GH_TOKEN              GitHub PAT  (repo + workflow scopes)
+#   JIRA_BASE_URL         https://jsw.ibm.com
+#   JIRA_USER_EMAIL       Your IBM Jira login email
+#   JIRA_API_TOKEN        Jira API token
+#   JIRA_PROJECT_KEY      ADCMS
+#   ACM_CLIENT_ID         Adobe Cloud Manager OAuth client ID
+#   ACM_CLIENT_SECRET     Adobe Cloud Manager OAuth client secret
+#   ACM_ORG_ID            Adobe IMS org ID
+#   ACM_PROGRAM_ID        Cloud Manager program ID
+#   ACM_PIPELINE_ID       Stage pipeline ID
+#   SLACK_WEBHOOK_URL     Incoming webhook for your release channel
+# ============================================================
+
+name: Release Cut
+
+on:
+  workflow_dispatch:
+    inputs:
+      prev_release_branch:
+        description: "Previous release branch  (e.g. release/2.01.0)"
+        required: true
+        type: string
+      new_version:
+        description: "New release version  (e.g. 2.02.0)"
+        required: true
+        type: string
+      new_version_label:
+        description: "New Jira fix-version label  (e.g. AEM 2.02.0 - Phoenix)"
+        required: true
+        type: string
+      prev_version_label:
+        description: "Previous Jira fix-version label  (e.g. AEM 2.01.0 - Kraken)"
+        required: true
+        type: string
+      jira_release_ticket:
+        description: "Jira release ticket key  (e.g. ADCMS-9999)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run — log all steps but make no actual changes"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NEW_RELEASE_BRANCH:  "release/${{ inputs.new_version }}"
+  PREV_RELEASE_BRANCH: "${{ inputs.prev_release_branch }}"
+  NEW_VERSION:         "${{ inputs.new_version }}"
+  NEW_VERSION_LABEL:   "${{ inputs.new_version_label }}"
+  PREV_VERSION_LABEL:  "${{ inputs.prev_version_label }}"
+  NEW_PRERELEASE_TAG:  "pre-release/${{ inputs.new_version }}"
+  DRY_RUN:             "${{ inputs.dry_run }}"
+
+
+# ============================================================
+# JOB 1 — Back-merge previous release branch → develop (always via PR)
+# ============================================================
+jobs:
+  back_merge:
+    name: "1 · Back-merge ${{ inputs.prev_release_branch }} → develop (PR)"
+    runs-on: self-hosted
+    outputs:
+      had_conflict: ${{ steps.merge.outputs.had_conflict }}
+      conflict_files: ${{ steps.merge.outputs.conflict_files }}
+      pr_url: ${{ steps.create_pr.outputs.pr_url }}
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "ADCMS Release Bot"
+          git config user.email "adcms-bot@ibm.com"
+
+      - name: Attempt merge into a PR branch
+        id: merge
+        run: |
+          # Always work on a dedicated branch — we always raise a PR
+          PR_BRANCH="chore/back-merge-${{ env.PREV_RELEASE_BRANCH }}"
+          git fetch origin "${{ env.PREV_RELEASE_BRANCH }}"
+          git checkout -b "$PR_BRANCH"
+
+          git merge --no-ff "origin/${{ env.PREV_RELEASE_BRANCH }}" \
+            -m "chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} into develop" \
+            || true
+
+          CONFLICTS=$(git diff --name-only --diff-filter=U)
+
+          if [ -n "$CONFLICTS" ]; then
+            echo "had_conflict=true" >> "$GITHUB_OUTPUT"
+            CONFLICT_LIST=$(echo "$CONFLICTS" | tr '\n' ',')
+            echo "conflict_files=$CONFLICT_LIST" >> "$GITHUB_OUTPUT"
+            # Stage conflict markers so PR diff is visible
+            git add -A
+            git commit -m "chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} [CONFLICTS — needs resolution]"
+            echo "⚠️  Conflicts in: $CONFLICTS"
+          else
+            echo "had_conflict=false" >> "$GITHUB_OUTPUT"
+            echo "conflict_files="    >> "$GITHUB_OUTPUT"
+            echo "✅ Clean merge"
+          fi
+
+          echo "pr_branch=$PR_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Push PR branch
+        if: env.DRY_RUN == 'false'
+        run: git push origin "${{ steps.merge.outputs.pr_branch }}"
+
+      - name: Create back-merge PR
+        id: create_pr
+        if: env.DRY_RUN == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          HAS_CONFLICT="${{ steps.merge.outputs.had_conflict }}"
+
+          if [ "$HAS_CONFLICT" = "true" ]; then
+            TITLE="chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} ⚠️ CONFLICTS"
+            BODY="## ⚠️ Merge Conflicts — Action Required
+
+          Back-merging \`${{ env.PREV_RELEASE_BRANCH }}\` into \`develop\` produced conflicts.
+
+          **Conflicting files:**
+          $(echo "${{ steps.merge.outputs.conflict_files }}" | tr ',' '\n' | sed 's/^/- /')
+
+          **What to do:**
+          1. Check out branch \`${{ steps.merge.outputs.pr_branch }}\` locally
+          2. Resolve all conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`)
+          3. Commit the resolution and push
+          4. Approve and merge this PR into \`develop\`
+          5. Then trigger **\`release-cut-continue.yml\`** manually with the same inputs
+
+          > Auto-created by Release Cut workflow run #${{ github.run_number }}"
+          else
+            TITLE="chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} → develop ✅"
+            BODY="## Clean back-merge
+
+          Automated back-merge of \`${{ env.PREV_RELEASE_BRANCH }}\` into \`develop\`.
+          No conflicts detected — ready to merge.
+
+          > Auto-created by Release Cut workflow run #${{ github.run_number }}"
+          fi
+
+          PR_URL=$(gh pr create \
+            --base develop \
+            --head "${{ steps.merge.outputs.pr_branch }}" \
+            --title "$TITLE" \
+            --body  "$BODY")
+
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "PR created: $PR_URL"
+
+      - name: Notify Slack — conflict needs resolution
+        if: steps.merge.outputs.had_conflict == 'true' && env.DRY_RUN == 'false'
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": "⚠️ *Release Cut — Merge Conflict Action Required*",
+              "attachments": [{
+                "color": "warning",
+                "fields": [
+                  {"title": "Release", "value": "${{ env.NEW_VERSION_LABEL }}", "short": true},
+                  {"title": "Triggered by", "value": "${{ github.actor }}", "short": true},
+                  {"title": "Back-merge", "value": "`${{ env.PREV_RELEASE_BRANCH }}` → `develop`", "short": false},
+                  {"title": "Conflicting files", "value": "`${{ steps.merge.outputs.conflict_files }}`", "short": false},
+                  {"title": "PR to resolve", "value": "${{ steps.create_pr.outputs.pr_url }}", "short": false},
+                  {"title": "Next step", "value": "Resolve the PR, merge it, then trigger `release-cut-continue.yml`", "short": false}
+                ]
+              }]
+            }'
+
+      - name: Notify Slack — clean PR raised
+        if: steps.merge.outputs.had_conflict == 'false' && env.DRY_RUN == 'false'
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "text": "✅ *Release Cut — Back-merge PR raised (no conflicts)*",
+              "attachments": [{
+                "color": "good",
+                "fields": [
+                  {"title": "Release", "value": "${{ env.NEW_VERSION_LABEL }}", "short": true},
+                  {"title": "PR", "value": "${{ steps.create_pr.outputs.pr_url }}", "short": false},
+                  {"title": "Action", "value": "Review and merge the PR into `develop`, then the release cut continues automatically.", "short": false}
+                ]
+              }]
+            }'
+
+      - name: Halt if conflicts — needs human resolution
+        if: steps.merge.outputs.had_conflict == 'true'
+        run: |
+          echo "::error::Merge conflicts detected. Resolve the PR then trigger release-cut-continue.yml"
+          exit 1
+
+
+# ============================================================
+# JOB 2 — Cut new release branch from develop
+# ============================================================
+  cut_release_branch:
+    name: "2 · Cut ${{ needs.back_merge.outputs.pr_url && 'release/' }}${{ inputs.new_version }} from develop"
+    runs-on: self-hosted
+    needs: back_merge
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "ADCMS Release Bot"
+          git config user.email "adcms-bot@ibm.com"
+
+      - name: Create and push release branch
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "[DRY RUN] Would create: ${{ env.NEW_RELEASE_BRANCH }}"; exit 0
+          fi
+          git checkout -b "${{ env.NEW_RELEASE_BRANCH }}"
+          git push origin "${{ env.NEW_RELEASE_BRANCH }}"
+          echo "✅ Branch created: ${{ env.NEW_RELEASE_BRANCH }}"
+
+
+# ============================================================
+# JOB 3 — Rotate tags
+# ============================================================
+  rotate_tags:
+    name: "3 · Rotate tags (prev latest + new pre-release)"
+    runs-on: self-hosted
+    needs: cut_release_branch
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Derive tag names
+        id: tags
+        run: |
+          PREV_VER=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed 's|release/||')
+          echo "prev_prerelease_tag=pre-release/$PREV_VER" >> "$GITHUB_OUTPUT"
+          echo "prev_latest_tag=latest/$PREV_VER"          >> "$GITHUB_OUTPUT"
+          echo "prev_ver=$PREV_VER"                        >> "$GITHUB_OUTPUT"
+
+      - name: Delete previous pre-release tag
+        run: |
+          TAG="${{ steps.tags.outputs.prev_prerelease_tag }}"
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would delete: $TAG" && exit 0
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          git push origin ":refs/tags/$TAG"      2>/dev/null || true
+          echo "✅ Deleted: $TAG"
+
+      - name: Create latest tag for previous release branch
+        run: |
+          TAG="${{ steps.tags.outputs.prev_latest_tag }}"
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: $TAG" && exit 0
+          gh release create "$TAG" \
+            --target "${{ env.PREV_RELEASE_BRANCH }}" \
+            --title  "Release ${{ steps.tags.outputs.prev_ver }}" \
+            --notes  "Stable release — ${{ steps.tags.outputs.prev_ver }}" \
+            --latest
+          echo "✅ Created latest tag: $TAG"
+
+      - name: Create pre-release tag for new release branch
+        run: |
+          TAG="${{ env.NEW_PRERELEASE_TAG }}"
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: $TAG" && exit 0
+          gh release create "$TAG" \
+            --target "${{ env.NEW_RELEASE_BRANCH }}" \
+            --title  "Pre-release ${{ env.NEW_VERSION }}" \
+            --notes  "Pre-release — ${{ env.NEW_VERSION_LABEL }}" \
+            --prerelease
+          echo "✅ Created pre-release tag: $TAG"
+
+
+# ============================================================
+# JOB 4 — Adobe Cloud Manager: update pipeline + trigger stage
+# ============================================================
+  adobe_cloud_manager:
+    name: "4 · Adobe Cloud Manager — update branch + trigger stage"
+    runs-on: self-hosted
+    needs: rotate_tags
+
+    steps:
+      - name: Get Adobe IMS access token
+        id: acm_auth
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            "https://ims-na1.adobelogin.com/ims/token/v3" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${{ secrets.ACM_CLIENT_ID }}" \
+            -d "client_secret=${{ secrets.ACM_CLIENT_SECRET }}" \
+            -d "scope=openid,AdobeID,read_organizations,additional_info.projectedProductContext")
+          TOKEN=$(echo "$RESPONSE" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).access_token))")
+          echo "::add-mask::$TOKEN"
+          echo "acm_token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Patch pipeline branch to new release branch
+        run: |
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would patch ACM pipeline branch" && exit 0
+
+          PIPELINE=$(curl -s \
+            -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+            -H "x-gw-ims-org-id: ${{ secrets.ACM_ORG_ID }}" \
+            "https://cloudmanager.adobe.io/api/program/${{ secrets.ACM_PROGRAM_ID }}/pipeline/${{ secrets.ACM_PIPELINE_ID }}")
+
+          UPDATED=$(echo "$PIPELINE" | node -e "
+            let d=''; process.stdin.on('data',c=>d+=c).on('end',()=>{
+              const p = JSON.parse(d);
+              (p.phases||[]).forEach(ph=>{ if(ph.type==='BUILD') ph.branch='${{ env.NEW_RELEASE_BRANCH }}'; });
+              console.log(JSON.stringify(p));
+            })")
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+            "https://cloudmanager.adobe.io/api/program/${{ secrets.ACM_PROGRAM_ID }}/pipeline/${{ secrets.ACM_PIPELINE_ID }}" \
+            -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+            -H "x-gw-ims-org-id: ${{ secrets.ACM_ORG_ID }}" \
+            -H "Content-Type: application/json" \
+            -d "$UPDATED")
+
+          echo "Pipeline PATCH → HTTP $HTTP_CODE"
+          [ "$HTTP_CODE" = "200" ] && echo "✅ Pipeline branch updated" || echo "::warning::PATCH returned $HTTP_CODE — verify in Cloud Manager"
+
+      - name: Trigger stage pipeline execution
+        run: |
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would trigger stage build" && exit 0
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+            "https://cloudmanager.adobe.io/api/program/${{ secrets.ACM_PROGRAM_ID }}/pipeline/${{ secrets.ACM_PIPELINE_ID }}/execution" \
+            -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+            -H "x-gw-ims-org-id: ${{ secrets.ACM_ORG_ID }}" \
+            -H "Content-Type: application/json")
+
+          echo "Pipeline trigger → HTTP $HTTP_CODE"
+          [ "$HTTP_CODE" = "201" ] && echo "✅ Stage pipeline triggered" || echo "::warning::Trigger returned $HTTP_CODE — verify manually in Cloud Manager"
+
+
+# ============================================================
+# JOB 5 — Compare tags, classify tickets, update Jira filter
+#          and update release ticket description
+# ============================================================
+  jira_release:
+    name: "5 · Jira — compare tags, classify tickets, update filter + release ticket"
+    runs-on: self-hosted
+    needs: rotate_tags
+    outputs:
+      confirmed_tickets: ${{ steps.classify.outputs.confirmed_tickets }}
+      untagged_open_tickets: ${{ steps.classify.outputs.untagged_open_tickets }}
+      ticket_count: ${{ steps.classify.outputs.ticket_count }}
+      filter_url: ${{ steps.create_filter.outputs.filter_url }}
+
+    steps:
+      - name: Checkout (to run scripts)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Extract ADCMS ticket IDs from tag comparison
+        id: extract
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          PREV_VER=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed 's|release/||')
+          PREV_TAG="latest/$PREV_VER"
+          NEW_TAG="${{ env.NEW_PRERELEASE_TAG }}"
+
+          echo "Comparing $PREV_TAG → $NEW_TAG"
+
+          # Get all commit messages between the two tags
+          # Mirrors your browser JS: extracts all ADCMS-NNNN from commit messages
+          COMMITS=$(git log "${PREV_TAG}..${NEW_TAG}" --pretty=format:"%s %b" 2>/dev/null \
+                    || git log "origin/${{ env.PREV_RELEASE_BRANCH }}..origin/${{ env.NEW_RELEASE_BRANCH }}" \
+                       --pretty=format:"%s %b")
+
+          # Replicate: new Set([...matches].flat().sort())
+          TICKETS=$(echo "$COMMITS" \
+            | grep -oE 'ADCMS-[0-9]{4,}' \
+            | sort -u \
+            | tr '\n' ',')
+
+          echo "raw_tickets=$TICKETS" >> "$GITHUB_OUTPUT"
+          echo "Raw tickets found: $TICKETS"
+
+      - name: Classify tickets via Jira API
+        id: classify
+        run: node scripts/classify_tickets.js
+        env:
+          JIRA_BASE_URL:       ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:     ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN:      ${{ secrets.JIRA_API_TOKEN }}
+          RAW_TICKETS:         ${{ steps.extract.outputs.raw_tickets }}
+          NEW_VERSION_LABEL:   ${{ env.NEW_VERSION_LABEL }}
+          PREV_VERSION_LABEL:  ${{ env.PREV_VERSION_LABEL }}
+
+      - name: Create new Jira release filter
+        id: create_filter
+        run: node scripts/update_jira_filter.js
+        env:
+          JIRA_BASE_URL:      ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:    ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN:     ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY:   ${{ secrets.JIRA_PROJECT_KEY }}
+          NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
+          DRY_RUN:            ${{ env.DRY_RUN }}
+
+      - name: Update release ticket description
+        run: node scripts/update_release_ticket.js
+        env:
+          JIRA_BASE_URL:          ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:        ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN:         ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_RELEASE_TICKET:    ${{ inputs.jira_release_ticket }}
+          FILTER_URL:             ${{ steps.create_filter.outputs.filter_url }}
+          NEW_VERSION_LABEL:      ${{ env.NEW_VERSION_LABEL }}
+          CONFIRMED_TICKETS:      ${{ steps.classify.outputs.confirmed_tickets }}
+          UNTAGGED_OPEN_TICKETS:  ${{ steps.classify.outputs.untagged_open_tickets }}
+          DRY_RUN:                ${{ env.DRY_RUN }}
+
+
+# ============================================================
+# JOB 6 — Notify open PRs targeting develop
+# ============================================================
+  notify_open_prs:
+    name: "6 · Notify devs — open PRs targeting develop"
+    runs-on: self-hosted
+    needs: [jira_release, adobe_cloud_manager]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Comment on open PRs
+        run: node scripts/notify_prs.js
+        env:
+          GH_TOKEN:           ${{ secrets.GH_TOKEN }}
+          GITHUB_SERVER_URL:  ${{ github.server_url }}
+          GITHUB_REPOSITORY:  ${{ github.repository }}
+          GITHUB_RUN_NUMBER:  ${{ github.run_number }}
+          GITHUB_RUN_ID:      ${{ github.run_id }}
+          NEW_RELEASE_BRANCH: ${{ env.NEW_RELEASE_BRANCH }}
+          NEW_VERSION:        ${{ env.NEW_VERSION }}
+          NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
+
+
+# ============================================================
+# JOB 7 — Final Slack summary
+# ============================================================
+  notify_slack_final:
+    name: "7 · Slack — release cut summary"
+    runs-on: self-hosted
+    needs: [adobe_cloud_manager, jira_release, notify_open_prs]
+    if: always()
+
+    steps:
+      - name: Determine overall status
+        id: status
+        run: |
+          ACM="${{ needs.adobe_cloud_manager.result }}"
+          JIRA="${{ needs.jira_release.result }}"
+          PRS="${{ needs.notify_open_prs.result }}"
+          if [ "$ACM" = "success" ] && [ "$JIRA" = "success" ] && [ "$PRS" = "success" ]; then
+            echo "color=good"   >> "$GITHUB_OUTPUT"
+            echo "icon=✅"      >> "$GITHUB_OUTPUT"
+          else
+            echo "color=danger" >> "$GITHUB_OUTPUT"
+            echo "icon=⚠️"      >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post to Slack
+        run: |
+          UNTAGGED="${{ needs.jira_release.outputs.untagged_open_tickets }}"
+          UNTAGGED_NOTE=""
+          if [ -n "$UNTAGGED" ]; then
+            UNTAGGED_NOTE="⚠️ Tickets found in release branch but NOT tagged to fix version (code merged, no fix version): \`$UNTAGGED\`"
+          fi
+
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"text\": \"${{ steps.status.outputs.icon }} *ADCMS Release Cut — ${{ env.NEW_VERSION_LABEL }}*\",
+              \"attachments\": [{
+                \"color\": \"${{ steps.status.outputs.color }}\",
+                \"fields\": [
+                  {\"title\": \"New release branch\",  \"value\": \"\`${{ env.NEW_RELEASE_BRANCH }}\`\",         \"short\": true},
+                  {\"title\": \"Pre-release tag\",     \"value\": \"\`${{ env.NEW_PRERELEASE_TAG }}\`\",         \"short\": true},
+                  {\"title\": \"Tickets in release\",  \"value\": \"${{ needs.jira_release.outputs.ticket_count }} confirmed tickets tagged to fix version\", \"short\": false},
+                  {\"title\": \"Jira filter\",         \"value\": \"${{ needs.jira_release.outputs.filter_url }}\", \"short\": false},
+                  {\"title\": \"Release ticket\",      \"value\": \"${{ inputs.jira_release_ticket }} description updated\", \"short\": false},
+                  {\"title\": \"Stage pipeline\",      \"value\": \"Triggered in Adobe Cloud Manager\",            \"short\": false},
+                  {\"title\": \"Untagged tickets\",    \"value\": \"$UNTAGGED_NOTE\",                              \"short\": false},
+                  {\"title\": \"Run\",                 \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"short\": false}
+                ],
+                \"footer\": \"Triggered by ${{ github.actor }} · Run #${{ github.run_number }}\"
+              }]
+            }"
