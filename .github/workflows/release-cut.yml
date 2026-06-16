@@ -194,20 +194,74 @@ jobs:
           PR_URL:             ${{ steps.create_pr.outputs.pr_url }}
           RUN_NUMBER:         ${{ github.run_number }}
 
-      - name: Halt if conflicts — needs human resolution
-        if: steps.merge.outputs.had_conflict == 'true'
+      - name: Summarise result for approval gate
         run: |
-          echo "::error::Merge conflicts detected. Resolve the PR then trigger release-cut-continue.yml"
-          exit 1
+          if [ "${{ steps.merge.outputs.had_conflict }}" = "true" ]; then
+            echo "⚠️  Conflicts detected in back-merge PR."
+            echo "    1. Resolve conflicts and merge the PR into develop"
+            echo "    2. Then come back here → Review deployments → Approve"
+          else
+            echo "✅ Clean merge — PR raised with no conflicts."
+            echo "    1. Merge the PR into develop"
+            echo "    2. Then come back here → Review deployments → Approve"
+          fi
+
+
+# ============================================================
+# JOB 1b — Human approval gate (clean merge AND conflict)
+# ============================================================
+# Workflow pauses here for ALL back-merge paths.
+#
+# What to do:
+#   1. Open the PR link from Slack
+#   2. If conflicts: resolve them, commit, push, then merge the PR
+#      If clean: just review and merge the PR
+#   3. Come back to Actions → this workflow run
+#   4. Click "Review deployments" → tick release-gate → Approve
+#   5. Workflow continues to Job 2 automatically
+#
+# The step below verifies develop is actually up to date
+# before allowing Job 2 to proceed — safety net in case
+# someone approves before merging.
+# ============================================================
+  await_pr_merge:
+    name: "1b · ⏸ Waiting — merge the back-merge PR then approve here"
+    runs-on: ubuntu-latest
+    needs: back_merge
+    environment: release-gate   # ← protected env with required reviewer
+
+    steps:
+      - name: Verify develop contains all commits from previous release branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          echo "Verifying back-merge PR is merged into develop..."
+
+          GHE_HOST=$(echo "${{ github.server_url }}" | sed 's|https://||')
+          REPO_URL="https://x-access-token:${{ secrets.GH_TOKEN }}@${GHE_HOST}/${{ github.repository }}.git"
+
+          git clone --depth=100 "$REPO_URL" repo_check
+          cd repo_check
+          git fetch origin "${{ env.PREV_RELEASE_BRANCH }}" develop
+
+          UNMERGED=$(git log origin/develop..origin/"${{ env.PREV_RELEASE_BRANCH }}" --oneline 2>/dev/null || echo "")
+
+          if [ -n "$UNMERGED" ]; then
+            echo "::error::develop is missing commits from ${{ env.PREV_RELEASE_BRANCH }}"
+            echo "::error::The PR has not been merged yet — please merge it first then re-approve."
+            exit 1
+          fi
+
+          echo "✅ develop is up to date — proceeding to branch cut"
 
 
 # ============================================================
 # JOB 2 — Cut new release branch from develop
 # ============================================================
   cut_release_branch:
-    name: "2 · Cut ${{ needs.back_merge.outputs.pr_url && 'release/' }}${{ inputs.new_version }} from develop"
+    name: "2 · Cut release-${{ inputs.new_version }}-${{ inputs.new_codename }} from develop"
     runs-on: ubuntu-latest
-    needs: back_merge
+    needs: await_pr_merge
 
     steps:
       - name: Checkout develop
