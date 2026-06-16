@@ -244,19 +244,27 @@ jobs:
     needs: [adobe_cloud_manager, jira_release, notify_open_prs]
     if: always()
     steps:
-      - run: |
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"text\": \"✅ *ADCMS Release Cut — ${{ env.NEW_VERSION_LABEL }} (resumed after conflict resolution)*\",
-              \"attachments\": [{
-                \"color\": \"good\",
-                \"fields\": [
-                  {\"title\": \"New branch\",         \"value\": \"\`${{ env.NEW_RELEASE_BRANCH }}\`\",  \"short\": true},
-                  {\"title\": \"Pre-release tag\",    \"value\": \"\`${{ env.NEW_PRERELEASE_TAG }}\`\",  \"short\": true},
-                  {\"title\": \"Previous latest tag\",\"value\": \"\`${{ env.PREV_LATEST_TAG }}\` created on \`${{ env.PREV_RELEASE_BRANCH }}\`\", \"short\": false},
-                  {\"title\": \"Triggered by\",       \"value\": \"${{ github.actor }}\",               \"short\": true},
-                  {\"title\": \"Note\", \"value\": \"Back-merge conflict was resolved manually before this run\", \"short\": false}
-                ]
-              }]
-            }"
+      - name: Checkout (needed for slack.js)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Post summary to Slack
+        run: node scripts/slack.js
+        env:
+          SLACK_WEBHOOK_URL:    ${{ secrets.SLACK_WEBHOOK_URL }}
+          NOTIFICATION_TYPE:    summary
+          NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
+          NEW_RELEASE_BRANCH:   ${{ env.NEW_RELEASE_BRANCH }}
+          NEW_PRERELEASE_TAG:   ${{ env.NEW_PRERELEASE_TAG }}
+          PREV_LATEST_TAG:      ${{ env.PREV_LATEST_TAG }}
+          PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
+          TICKET_COUNT:         ${{ needs.jira_release.outputs.ticket_count }}
+          FILTER_URL:           ${{ needs.jira_release.outputs.filter_url }}
+          JIRA_RELEASE_TICKET:  ${{ inputs.jira_release_ticket }}
+          UNTAGGED_TICKETS:     ${{ needs.jira_release.outputs.untagged_open_tickets }}
+          ACM_RESULT:           ${{ needs.adobe_cloud_manager.result }}
+          JIRA_RESULT:          ${{ needs.jira_release.result }}
+          PRS_RESULT:           ${{ needs.notify_open_prs.result }}
+          GITHUB_ACTOR:         ${{ github.actor }}
+          RUN_NUMBER:           ${{ github.run_number }}
+          RUN_URL:              ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

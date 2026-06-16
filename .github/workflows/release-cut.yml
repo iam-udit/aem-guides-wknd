@@ -172,40 +172,27 @@ jobs:
 
       - name: Notify Slack — conflict needs resolution
         if: steps.merge.outputs.had_conflict == 'true' && env.DRY_RUN == 'false'
-        run: |
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "text": "⚠️ *Release Cut — Merge Conflict Action Required*",
-              "attachments": [{
-                "color": "warning",
-                "fields": [
-                  {"title": "Release", "value": "${{ env.NEW_VERSION_LABEL }}", "short": true},
-                  {"title": "Triggered by", "value": "${{ github.actor }}", "short": true},
-                  {"title": "Back-merge", "value": "`${{ env.PREV_RELEASE_BRANCH }}` → `develop`", "short": false},
-                  {"title": "Conflicting files", "value": "`${{ steps.merge.outputs.conflict_files }}`", "short": false},
-                  {"title": "PR to resolve", "value": "${{ steps.create_pr.outputs.pr_url }}", "short": false},
-                  {"title": "Next step", "value": "Resolve the PR, merge it, then trigger `release-cut-continue.yml`", "short": false}
-                ]
-              }]
-            }'
+        run: node scripts/slack.js
+        env:
+          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          NOTIFICATION_TYPE:  conflict
+          NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
+          PREV_RELEASE_BRANCH: ${{ env.PREV_RELEASE_BRANCH }}
+          GITHUB_ACTOR:       ${{ github.actor }}
+          CONFLICT_FILES:     ${{ steps.merge.outputs.conflict_files }}
+          PR_URL:             ${{ steps.create_pr.outputs.pr_url }}
+          RUN_NUMBER:         ${{ github.run_number }}
 
       - name: Notify Slack — clean PR raised
         if: steps.merge.outputs.had_conflict == 'false' && env.DRY_RUN == 'false'
-        run: |
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "text": "✅ *Release Cut — Back-merge PR raised (no conflicts)*",
-              "attachments": [{
-                "color": "good",
-                "fields": [
-                  {"title": "Release", "value": "${{ env.NEW_VERSION_LABEL }}", "short": true},
-                  {"title": "PR", "value": "${{ steps.create_pr.outputs.pr_url }}", "short": false},
-                  {"title": "Action", "value": "Review and merge the PR into `develop`, then the release cut continues automatically.", "short": false}
-                ]
-              }]
-            }'
+        run: node scripts/slack.js
+        env:
+          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          NOTIFICATION_TYPE:  clean_pr
+          NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
+          GITHUB_ACTOR:       ${{ github.actor }}
+          PR_URL:             ${{ steps.create_pr.outputs.pr_url }}
+          RUN_NUMBER:         ${{ github.run_number }}
 
       - name: Halt if conflicts — needs human resolution
         if: steps.merge.outputs.had_conflict == 'true'
@@ -478,6 +465,11 @@ jobs:
     if: always()
 
     steps:
+      - name: Checkout (needed for slack.js)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
       - name: Determine overall status
         id: status
         run: |
@@ -485,38 +477,28 @@ jobs:
           JIRA="${{ needs.jira_release.result }}"
           PRS="${{ needs.notify_open_prs.result }}"
           if [ "$ACM" = "success" ] && [ "$JIRA" = "success" ] && [ "$PRS" = "success" ]; then
-            echo "color=good"   >> "$GITHUB_OUTPUT"
-            echo "icon=✅"      >> "$GITHUB_OUTPUT"
+            echo "overall=success" >> "$GITHUB_OUTPUT"
           else
-            echo "color=danger" >> "$GITHUB_OUTPUT"
-            echo "icon=⚠️"      >> "$GITHUB_OUTPUT"
+            echo "overall=failure" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Post to Slack
-        run: |
-          UNTAGGED="${{ needs.jira_release.outputs.untagged_open_tickets }}"
-          UNTAGGED_NOTE=""
-          if [ -n "$UNTAGGED" ]; then
-            UNTAGGED_NOTE="⚠️ Tickets found in release branch but NOT tagged to fix version (code merged, no fix version): \`$UNTAGGED\`"
-          fi
-
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"text\": \"${{ steps.status.outputs.icon }} *ADCMS Release Cut — ${{ env.NEW_VERSION_LABEL }}*\",
-              \"attachments\": [{
-                \"color\": \"${{ steps.status.outputs.color }}\",
-                \"fields\": [
-                  {\"title\": \"New release branch\",  \"value\": \"\`${{ env.NEW_RELEASE_BRANCH }}\`\",          \"short\": true},
-                  {\"title\": \"Pre-release tag\",     \"value\": \"\`${{ env.NEW_PRERELEASE_TAG }}\`\",           \"short\": true},
-                  {\"title\": \"Previous latest tag\", \"value\": \"\`${{ env.PREV_LATEST_TAG }}\` created on \`${{ env.PREV_RELEASE_BRANCH }}\`\", \"short\": false},
-                  {\"title\": \"Tickets in release\",  \"value\": \"${{ needs.jira_release.outputs.ticket_count }} confirmed tickets tagged to fix version\", \"short\": false},
-                  {\"title\": \"Jira filter\",         \"value\": \"${{ needs.jira_release.outputs.filter_url }}\", \"short\": false},
-                  {\"title\": \"Release ticket\",      \"value\": \"${{ inputs.jira_release_ticket }} description updated\", \"short\": false},
-                  {\"title\": \"Stage pipeline\",      \"value\": \"Triggered in Adobe Cloud Manager\",            \"short\": false},
-                  {\"title\": \"Untagged tickets\",    \"value\": \"$UNTAGGED_NOTE\",                              \"short\": false},
-                  {\"title\": \"Run\",                 \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"short\": false}
-                ],
-                \"footer\": \"Triggered by ${{ github.actor }} · Run #${{ github.run_number }}\"
-              }]
-            }"
+      - name: Post summary to Slack
+        run: node scripts/slack.js
+        env:
+          SLACK_WEBHOOK_URL:    ${{ secrets.SLACK_WEBHOOK_URL }}
+          NOTIFICATION_TYPE:    summary
+          NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
+          NEW_RELEASE_BRANCH:   ${{ env.NEW_RELEASE_BRANCH }}
+          NEW_PRERELEASE_TAG:   ${{ env.NEW_PRERELEASE_TAG }}
+          PREV_LATEST_TAG:      ${{ env.PREV_LATEST_TAG }}
+          PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
+          TICKET_COUNT:         ${{ needs.jira_release.outputs.ticket_count }}
+          FILTER_URL:           ${{ needs.jira_release.outputs.filter_url }}
+          JIRA_RELEASE_TICKET:  ${{ inputs.jira_release_ticket }}
+          UNTAGGED_TICKETS:     ${{ needs.jira_release.outputs.untagged_open_tickets }}
+          ACM_RESULT:           ${{ needs.adobe_cloud_manager.result }}
+          JIRA_RESULT:          ${{ needs.jira_release.result }}
+          PRS_RESULT:           ${{ needs.notify_open_prs.result }}
+          GITHUB_ACTOR:         ${{ github.actor }}
+          RUN_NUMBER:           ${{ github.run_number }}
+          RUN_URL:              ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
