@@ -58,6 +58,9 @@ public class HelloWorldModel {
             + "Current page is:  " + currentPagePath + "\n";
     }
 
+    /**
+     * Test changes for ADCMS-3
+     */
     public String getMessage() {
         return message;
     }
