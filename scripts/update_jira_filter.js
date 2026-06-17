@@ -95,13 +95,19 @@ async function main() {
     return;
   }
 
+  // Fetch project ID first (required for sharePermissions)
+  console.log(`\n[Jira Filter] Fetching project ID for ${PROJECT}...`);
+  const projectData = await request('GET', `project/${PROJECT}`);
+  const projectId = projectData.id;
+  console.log(`  Project ID: ${projectId}`);
+
   const result = await request('POST', 'filter', {
     name:        filterName,
     description: `Auto-created by Release Cut workflow for ${NEW_LABEL}`,
     jql,
     // Share with everyone in the project so the ADCMS team can access it
     sharePermissions: [
-      { type: 'project', project: { key: PROJECT } },
+      { type: 'project', project: { id: projectId } },
     ],
   });
 
