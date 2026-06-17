@@ -60,9 +60,11 @@ Confirm runner is registered: **Repo → Settings → Actions → Runners**
 
 Required tools on the runner (all standard on Linux):
 - `git`
-- `gh` CLI  (`gh --version`)
+- `gh` CLI  (`gh --version`) — used to monitor PR merge status
 - `node`    (`node --version`)
 - `curl`
+
+**Note:** The workflow no longer requires a protected environment (`release-gate`). If you previously configured one, you can safely delete it from **Repo → Settings → Environments**.
 
 ---
 
@@ -91,7 +93,8 @@ Required tools on the runner (all standard on Linux):
 
 | Job | What it does |
 |-----|--------------|
-| **1 · Back-merge** | Merges `release/prev` into `develop` via a PR (always — even for clean merges). On conflict: conflict markers committed, PR raised, Slack alert sent, workflow stops. |
+| **1 · Back-merge** | Merges `release/prev` into `develop` via a PR (always — even for clean merges). On conflict: conflict markers committed, PR raised, Slack alert sent. |
+| **1b · Wait for PR merge** | Actively polls the back-merge PR status every 30 seconds until it's merged. Workflow automatically continues once PR is merged into `develop`. Times out after 2 hours if not merged. |
 | **2 · Cut branch** | Creates `release/x.x.x` from `develop` and pushes |
 | **3 · Rotate tags** | Deletes `pre-release/prev` → creates `latest/prev` → creates `pre-release/new` |
 | **4 · ACM pipeline** | Gets IMS token, patches stage pipeline branch to new release branch, triggers stage build |
@@ -154,13 +157,16 @@ Creates PR: chore/back-merge-release/x.x.x-conflicts → develop
   ↓
 Slack alert: conflicting files + PR link + instructions
   ↓
-Workflow STOPS ← you act here
+Job 1b starts polling PR status (checks every 30 seconds)
   ↓
-Resolve PR → merge into develop
+You resolve conflicts → commit → push → merge PR
   ↓
-Trigger "Release Cut — Continue After Conflict Resolution"
-with same inputs → picks up from Job 2
+Job 1b detects PR is merged → workflow automatically continues
+  ↓
+Job 2 starts (cut release branch)
 ```
+
+**Note:** The workflow now automatically detects when the PR is merged and continues. You no longer need to manually approve or trigger a continuation workflow.
 
 ---
 

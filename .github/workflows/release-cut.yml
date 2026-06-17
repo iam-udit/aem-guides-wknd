@@ -208,51 +208,91 @@ jobs:
 
 
 # ============================================================
-# JOB 1b — Human approval gate (clean merge AND conflict)
+# JOB 1b — Wait for back-merge PR to be merged
 # ============================================================
-# Workflow pauses here for ALL back-merge paths.
+# Workflow actively polls the PR status and waits until it's merged.
+# This ensures the PR is actually merged before proceeding to Job 2.
 #
 # What to do:
-#   1. Open the PR link from Slack
-#   2. If conflicts: resolve them, commit, push, then merge the PR
-#      If clean: just review and merge the PR
-#   3. Come back to Actions → this workflow run
-#   4. Click "Review deployments" → tick release-gate → Approve
-#   5. Workflow continues to Job 2 automatically
+#   1. Open the PR link from Slack notification
+#   2. Review the changes
+#   3. If conflicts exist: resolve them, commit, and push
+#   4. Merge the PR into develop
+#   5. This workflow will automatically continue once the PR is merged
 #
-# The step below verifies develop is actually up to date
-# before allowing Job 2 to proceed — safety net in case
-# someone approves before merging.
+# The polling mechanism checks PR status every 30 seconds and times out
+# after 2 hours if the PR is not merged.
 # ============================================================
   await_pr_merge:
-    name: "1b · ⏸ Waiting — merge the back-merge PR then approve here"
+    name: "1b · ⏸ Waiting for back-merge PR to be merged"
     runs-on: ubuntu-latest
     needs: back_merge
-    environment: release-gate   # ← protected env with required reviewer
 
     steps:
-      - name: Verify develop contains all commits from previous release branch
+      - name: Wait for PR to be merged into develop
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          PR_URL: ${{ needs.back_merge.outputs.pr_url }}
         run: |
-          echo "Verifying back-merge PR is merged into develop..."
-
-          GHE_HOST=$(echo "${{ github.server_url }}" | sed 's|https://||')
-          REPO_URL="https://x-access-token:${{ secrets.GH_TOKEN }}@${GHE_HOST}/${{ github.repository }}.git"
-
-          git clone --depth=100 "$REPO_URL" repo_check
-          cd repo_check
-          git fetch origin "${{ env.PREV_RELEASE_BRANCH }}" develop
-
-          UNMERGED=$(git log origin/develop..origin/"${{ env.PREV_RELEASE_BRANCH }}" --oneline 2>/dev/null || echo "")
-
-          if [ -n "$UNMERGED" ]; then
-            echo "::error::develop is missing commits from ${{ env.PREV_RELEASE_BRANCH }}"
-            echo "::error::The PR has not been merged yet — please merge it first then re-approve."
+          echo "⏳ Waiting for back-merge PR to be merged into develop..."
+          echo "PR URL: $PR_URL"
+          echo ""
+          echo "📋 Instructions:"
+          echo "  1. Open the PR: $PR_URL"
+          echo "  2. Review the changes"
+          echo "  3. If conflicts exist: resolve them, commit, and push"
+          echo "  4. Merge the PR into develop"
+          echo "  5. This workflow will automatically continue once merged"
+          echo ""
+          
+          # Extract PR number from URL
+          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::Could not extract PR number from URL: $PR_URL"
             exit 1
           fi
-
-          echo "✅ develop is up to date — proceeding to branch cut"
+          
+          echo "Monitoring PR #$PR_NUMBER..."
+          echo ""
+          
+          MAX_WAIT=7200  # 2 hours timeout
+          INTERVAL=30    # Check every 30 seconds
+          ELAPSED=0
+          CHECK_COUNT=0
+          
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            CHECK_COUNT=$((CHECK_COUNT + 1))
+            
+            # Check PR status using GitHub CLI
+            PR_STATE=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
+            
+            if [ "$PR_STATE" = "MERGED" ]; then
+              echo ""
+              echo "✅ PR #$PR_NUMBER has been merged into develop"
+              echo "Proceeding with release cut..."
+              exit 0
+            elif [ "$PR_STATE" = "CLOSED" ]; then
+              echo ""
+              echo "::error::PR #$PR_NUMBER was closed without merging"
+              echo "::error::Please reopen and merge the PR, or restart the workflow"
+              exit 1
+            elif [ "$PR_STATE" = "OPEN" ]; then
+              MINUTES_ELAPSED=$((ELAPSED / 60))
+              MINUTES_REMAINING=$(((MAX_WAIT - ELAPSED) / 60))
+              echo "[Check #$CHECK_COUNT] PR #$PR_NUMBER is still open - waiting... (${MINUTES_ELAPSED}m elapsed, ${MINUTES_REMAINING}m remaining)"
+            else
+              echo "[Check #$CHECK_COUNT] ⚠️  Could not determine PR state (received: $PR_STATE)"
+            fi
+            
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+          
+          echo ""
+          echo "::error::Timeout: PR #$PR_NUMBER was not merged within $((MAX_WAIT/60)) minutes"
+          echo "::error::Please merge the PR manually and re-run the workflow"
+          exit 1
 
 
 # ============================================================
