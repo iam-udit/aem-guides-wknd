@@ -98,7 +98,7 @@ async function fetchAllReleaseTickets() {
   while (true) {
     const response = await request(
       'GET',
-      `search?jql=${encodeURIComponent(jql)}&startAt=${startAt}&maxResults=${maxResults}&fields=key`
+      `search/jql?jql=${encodeURIComponent(jql)}&startAt=${startAt}&maxResults=${maxResults}&fields=key`
     );
 
     const tickets = response.issues.map(issue => issue.key);
