@@ -25,17 +25,39 @@ const https  = require('https');
 const url    = require('url');
 const fs     = require('fs');
 
-const JIRA_BASE  = process.env.JIRA_BASE_URL.replace(/\/$/, '');
-const EMAIL      = process.env.JIRA_USER_EMAIL;
-const TOKEN      = process.env.JIRA_API_TOKEN;
-const PROJECT    = process.env.JIRA_PROJECT_KEY;
-const NEW_LABEL  = process.env.NEW_VERSION_LABEL;   // e.g. "AEM 2.02.0 - Phoenix"
+/**
+ * Reads and validates a required environment variable.
+ *
+ * @param {string} name Environment variable name.
+ * @returns {string} Trimmed environment variable value.
+ * @throws {Error} Thrown when the variable is missing or blank.
+ */
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value || !String(value).trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return String(value).trim();
+}
+
+const JIRA_BASE  = requireEnv('JIRA_BASE_URL').replace(/\/$/, '');
+const EMAIL      = requireEnv('JIRA_USER_EMAIL');
+const TOKEN      = requireEnv('JIRA_API_TOKEN');
+const PROJECT    = requireEnv('JIRA_PROJECT_KEY');
+const NEW_LABEL  = requireEnv('NEW_VERSION_LABEL');   // e.g. "AEM 2.02.0 - Phoenix"
 const DRY_RUN    = process.env.DRY_RUN === 'true';
 const GH_OUTPUT  = process.env.GITHUB_OUTPUT;
 
 const AUTH = Buffer.from(`${EMAIL}:${TOKEN}`).toString('base64');
 
-// ── HTTP helper ───────────────────────────────────────────────────────────────
+/**
+ * Executes a Jira REST API request and parses the JSON response body.
+ *
+ * @param {string} method HTTP method to use.
+ * @param {string} path Jira API path relative to /rest/api/3/.
+ * @param {object} [body] Optional JSON payload for write operations.
+ * @returns {Promise<object|Array>} Parsed Jira API response payload.
+ */
 function request(method, path, body) {
   return new Promise((resolve, reject) => {
     const parsed  = url.parse(`${JIRA_BASE}/rest/api/3/${path}`);
@@ -58,8 +80,13 @@ function request(method, path, body) {
       res.on('end', () => {
         if (res.statusCode >= 400) {
           reject(new Error(`Jira API ${res.statusCode} on ${method} ${path}: ${data}`));
-        } else {
+          return;
+        }
+
+        try {
           resolve(data ? JSON.parse(data) : {});
+        } catch (err) {
+          reject(new Error(`Failed to parse Jira response for ${method} ${path}: ${err.message}`));
         }
       });
     });
@@ -70,7 +97,11 @@ function request(method, path, body) {
   });
 }
 
-// ── Build JQL — your exact format, only fixVersion swapped ───────────────────
+/**
+ * Builds the Jira Query Language statement for the current release fix version.
+ *
+ * @returns {string} JQL used to create the saved release filter.
+ */
 function buildJQL() {
   return (
     `project = ${PROJECT} AND ` +
@@ -80,7 +111,11 @@ function buildJQL() {
   );
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+/**
+ * Creates the Jira release filter and exports its identifier and URL for downstream jobs.
+ *
+ * @returns {Promise<void>} Resolves when filter creation or dry-run logging completes.
+ */
 async function main() {
   const jql        = buildJQL();
   const filterName = NEW_LABEL;
@@ -125,4 +160,7 @@ async function main() {
   }
 }
 
-main().catch(err => { console.error(err.message); process.exit(1); });
+main().catch(err => {
+  console.error(`[Jira Filter] Fatal error: ${err.message}`);
+  process.exit(1);
+});

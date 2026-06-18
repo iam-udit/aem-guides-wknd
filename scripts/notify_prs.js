@@ -24,24 +24,33 @@
 const https  = require('https');
 const url    = require('url');
 
-const TOKEN         = process.env.GH_TOKEN;
+/**
+ * Reads and validates a required environment variable.
+ *
+ * @param {string} name Environment variable name.
+ * @returns {string} Trimmed environment variable value.
+ * @throws {Error} Thrown when the variable is missing or blank.
+ */
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value || !String(value).trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return String(value).trim();
+}
+
+const TOKEN         = requireEnv('GH_TOKEN');
 const SERVER_URL    = (process.env.GITHUB_SERVER_URL || 'https://github.com').replace(/\/$/, '');
-const REPO          = process.env.GITHUB_REPOSITORY;
+const REPO          = requireEnv('GITHUB_REPOSITORY');
 const RUN_NUMBER    = process.env.GITHUB_RUN_NUMBER || '?';
 const RUN_ID        = process.env.GITHUB_RUN_ID     || '';
-const NEW_BRANCH    = process.env.NEW_RELEASE_BRANCH;
-const NEW_VER       = process.env.NEW_VERSION;
-const NEW_LABEL     = process.env.NEW_VERSION_LABEL;
-const JIRA_BASE     = process.env.JIRA_BASE_URL.replace(/\/$/, '');
-const JIRA_EMAIL    = process.env.JIRA_USER_EMAIL;
-const JIRA_TOKEN    = process.env.JIRA_API_TOKEN;
-const PROJECT_KEY   = process.env.JIRA_PROJECT_KEY;
-
-// Fail fast if GH_TOKEN is missing
-if (!TOKEN) {
-  console.error('GH_TOKEN is not set. Set the GH_TOKEN secret for this workflow.');
-  process.exit(1);
-}
+const NEW_BRANCH    = requireEnv('NEW_RELEASE_BRANCH');
+const NEW_VER       = (process.env.NEW_VERSION || '').trim();
+const NEW_LABEL     = requireEnv('NEW_VERSION_LABEL');
+const JIRA_BASE     = requireEnv('JIRA_BASE_URL').replace(/\/$/, '');
+const JIRA_EMAIL    = requireEnv('JIRA_USER_EMAIL');
+const JIRA_TOKEN    = requireEnv('JIRA_API_TOKEN');
+const PROJECT_KEY   = requireEnv('JIRA_PROJECT_KEY');
 
 // Determine API base URL based on server
 const GHE_HOST = SERVER_URL.replace(/^https?:\/\//, '');
@@ -59,7 +68,14 @@ const GH_HEADERS = {
 
 const JIRA_AUTH = Buffer.from(`${JIRA_EMAIL}:${JIRA_TOKEN}`).toString('base64');
 
-// ── HTTP helpers ──────────────────────────────────────────────────────────────
+/**
+ * Executes a GitHub REST API request and parses the JSON response body.
+ *
+ * @param {string} method HTTP method to use.
+ * @param {string} path GitHub API path relative to the resolved API base URL.
+ * @param {object} [body] Optional JSON payload for write operations.
+ * @returns {Promise<object|Array>} Parsed GitHub API response payload.
+ */
 function ghRequest(method, path, body) {
   return new Promise((resolve, reject) => {
     const parsed  = url.parse(`${API_BASE}${path}`);
@@ -80,8 +96,13 @@ function ghRequest(method, path, body) {
       res.on('end', () => {
         if (res.statusCode >= 400) {
           reject(new Error(`GitHub API ${res.statusCode} for ${method} ${path}: ${data}`));
-        } else {
+          return;
+        }
+
+        try {
           resolve(data ? JSON.parse(data) : {});
+        } catch (err) {
+          reject(new Error(`Failed to parse GitHub response for ${method} ${path}: ${err.message}`));
         }
       });
     });
@@ -92,6 +113,14 @@ function ghRequest(method, path, body) {
   });
 }
 
+/**
+ * Executes a Jira REST API request and parses the JSON response body.
+ *
+ * @param {string} method HTTP method to use.
+ * @param {string} path Jira API path relative to /rest/api/3/.
+ * @param {object} [body] Optional JSON payload for write operations.
+ * @returns {Promise<object|Array>} Parsed Jira API response payload.
+ */
 function jiraRequest(method, path, body) {
   return new Promise((resolve, reject) => {
     const parsed  = url.parse(`${JIRA_BASE}/rest/api/3/${path}`);
@@ -114,8 +143,13 @@ function jiraRequest(method, path, body) {
       res.on('end', () => {
         if (res.statusCode >= 400) {
           reject(new Error(`Jira API ${res.statusCode} for ${method} ${path}: ${data}`));
-        } else {
+          return;
+        }
+
+        try {
           resolve(data ? JSON.parse(data) : {});
+        } catch (err) {
+          reject(new Error(`Failed to parse Jira response for ${method} ${path}: ${err.message}`));
         }
       });
     });
@@ -126,6 +160,11 @@ function jiraRequest(method, path, body) {
   });
 }
 
+/**
+ * Retrieves all open pull requests currently targeting the develop branch.
+ *
+ * @returns {Promise<Array<object>>} List of open pull request objects from GitHub.
+ */
 async function getAllOpenPRs() {
   const prs  = [];
   let   page = 1;
@@ -141,7 +180,13 @@ async function getAllOpenPRs() {
   return prs;
 }
 
-// ── Extract ticket IDs from PR title and body ─────────────────────────────────
+/**
+ * Extracts unique Jira ticket keys from a pull request title and body.
+ *
+ * @param {string} title Pull request title.
+ * @param {string} body Pull request body text.
+ * @returns {string[]} Unique Jira ticket keys referenced in the PR content.
+ */
 function extractTicketIds(title, body) {
   const text = `${title}\n${body || ''}`;
   const matches = text.match(new RegExp(`${PROJECT_KEY}-[0-9]{1,}`, 'g'));
@@ -150,7 +195,12 @@ function extractTicketIds(title, body) {
   return [...new Set(matches)];
 }
 
-// ── Check if ticket has the new release fix version ──────────────────────────
+/**
+ * Checks whether a Jira ticket is tagged with the current release fix version.
+ *
+ * @param {string} ticketId Jira issue key to inspect.
+ * @returns {Promise<boolean>} True when the ticket includes the current release label.
+ */
 async function checkTicketFixVersion(ticketId) {
   try {
     const issue = await jiraRequest('GET', `issue/${ticketId}?fields=fixVersions`);
@@ -162,7 +212,13 @@ async function checkTicketFixVersion(ticketId) {
   }
 }
 
-// ── Build targeted comment for PR with matching tickets ──────────────────────
+/**
+ * Builds a targeted PR comment for pull requests whose Jira tickets match the release.
+ *
+ * @param {string} author GitHub login of the pull request author.
+ * @param {string[]} matchingTickets Jira ticket keys tagged with the current release.
+ * @returns {string} Markdown comment body for the pull request.
+ */
 function buildTargetedComment(author, matchingTickets) {
   const ticketLinks = matchingTickets.map(id =>
     `[${id}](${JIRA_BASE}/browse/${id})`
@@ -174,16 +230,26 @@ function buildTargetedComment(author, matchingTickets) {
   return `@${author} — ${ticketLinks} ${isAre} currently tagged with ${NEW_LABEL}, and its release branch has been cut. Please either rebase its feature branch & change its target branch of this PR to [${NEW_BRANCH}](${SERVER_URL}/${REPO}/tree/${NEW_BRANCH}) or remove the release tag from the ${ticketList} if it's not supposed to be part of it.`;
 }
 
-// ── Build generic comment for PR without matching tickets ────────────────────
+/**
+ * Builds a generic PR comment for pull requests without release-matching Jira tickets.
+ *
+ * @param {string} author GitHub login of the pull request author.
+ * @returns {string} Markdown comment body for the pull request.
+ */
 function buildGenericComment(author) {
-  return `@${author} — Release **${NEW_LABEL}** has been cut, and the new release branch [${NEW_BRANCH}](${SERVER_URL}/${REPO}/tree/${NEW_BRANCH}) is now available.
+  const releaseDescriptor = NEW_VER ? `Release **${NEW_LABEL}** (${NEW_VER})` : `Release **${NEW_LABEL}**`;
+  return `@${author} — ${releaseDescriptor} has been cut, and the new release branch [${NEW_BRANCH}](${SERVER_URL}/${REPO}/tree/${NEW_BRANCH}) is now available.
 
 If this PR contains changes intended for **${NEW_LABEL}**, please rebase your feature branch and retarget this PR to [${NEW_BRANCH}](${SERVER_URL}/${REPO}/tree/${NEW_BRANCH}).
 
 If this PR is **not** intended for this release, no action is needed — it will be included in a future release.`;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+/**
+ * Notifies all open develop-targeting pull requests about the newly cut release branch.
+ *
+ * @returns {Promise<void>} Resolves when PR discovery and commenting complete.
+ */
 async function main() {
   console.log(`\n[PR Notify] Fetching open pull requests targeting develop in ${REPO}`);
   console.log(`[PR Notify] API Base: ${API_BASE}`);
@@ -286,6 +352,9 @@ async function main() {
   console.log(`========================================\n`);
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+main().catch(err => {
+  console.error(`[PR Notify] Fatal error: ${err.message}`);
+  process.exit(1);
+});
 
 // Made with Bob

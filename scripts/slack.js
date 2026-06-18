@@ -30,18 +30,33 @@
  */
 
 const https = require('https');
-const url   = require('url');
 const fs    = require('fs');
 
-const BOT_TOKEN  = process.env.SLACK_BOT_TOKEN;
-const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
-const TYPE       = process.env.NOTIFICATION_TYPE;
+/**
+ * Reads and validates a required environment variable.
+ *
+ * @param {string} name Environment variable name.
+ * @returns {string} Trimmed environment variable value.
+ * @throws {Error} Thrown when the variable is missing or blank.
+ */
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value || !String(value).trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return String(value).trim();
+}
 
-if (!BOT_TOKEN)  { console.error('SLACK_BOT_TOKEN is required'); process.exit(1); }
-if (!CHANNEL_ID) { console.error('SLACK_CHANNEL_ID is required'); process.exit(1); }
-if (!TYPE)       { console.error('NOTIFICATION_TYPE is required'); process.exit(1); }
+const BOT_TOKEN  = requireEnv('SLACK_BOT_TOKEN');
+const CHANNEL_ID = requireEnv('SLACK_CHANNEL_ID');
+const TYPE       = requireEnv('NOTIFICATION_TYPE');
 
-// ── HTTP post to Slack API ────────────────────────────────────────────────────
+/**
+ * Sends a message payload to Slack using chat.postMessage.
+ *
+ * @param {object} payload Slack message payload.
+ * @returns {Promise<object>} Parsed Slack API response.
+ */
 function postToSlack(payload) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(payload);
@@ -79,7 +94,11 @@ function postToSlack(payload) {
   });
 }
 
-// ── Build start message (main thread) ─────────────────────────────────────────
+/**
+ * Builds the root Slack thread message posted when the workflow starts.
+ *
+ * @returns {object} Slack message payload for the workflow start notification.
+ */
 function buildStartMessage() {
   const runUrl = process.env.RUN_URL || '';
   const actor = process.env.GITHUB_ACTOR || 'unknown';
@@ -140,7 +159,11 @@ function buildStartMessage() {
   };
 }
 
-// ── Build back-merge reply (thread reply) ─────────────────────────────────────
+/**
+ * Builds the threaded Slack reply for the back-merge stage.
+ *
+ * @returns {object} Slack message payload describing clean merge or conflict status.
+ */
 function buildBackmergeReply() {
   const hadConflict = process.env.HAD_CONFLICT === 'true';
   const prUrl = process.env.PR_URL || '';
@@ -270,7 +293,11 @@ function buildBackmergeReply() {
   }
 }
 
-// ── Build summary reply (thread reply) ────────────────────────────────────────
+/**
+ * Builds the threaded Slack summary message for workflow completion.
+ *
+ * @returns {object} Slack message payload for success or failure summary.
+ */
 function buildSummaryReply() {
   const acm = process.env.ACM_RESULT || 'unknown';
   const jira = process.env.JIRA_RESULT || 'unknown';
@@ -451,7 +478,11 @@ function buildSummaryReply() {
   }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+/**
+ * Selects the requested notification type, posts it to Slack, and exports thread metadata.
+ *
+ * @returns {Promise<void>} Resolves when the Slack notification has been sent.
+ */
 async function main() {
   let payload;
   let messageType;
@@ -488,6 +519,13 @@ async function main() {
   }
 }
 
-main().catch(err => { console.error(`[Slack] Error: ${err.message}`); process.exit(1); });
+main().catch(err => {
+  console.error(`[Slack] Fatal error: ${err.message}`);
+  process.exit(1);
+});
+main().catch(err => {
+  console.error(`[Slack] Fatal error: ${err.message}`);
+  process.exit(1);
+});
 
 // Made with Bob

@@ -29,18 +29,38 @@ const https  = require('https');
 const fs     = require('fs');
 const url    = require('url');
 
-const JIRA_BASE      = process.env.JIRA_BASE_URL.replace(/\/$/, '');
-const EMAIL          = process.env.JIRA_USER_EMAIL;
-const TOKEN          = process.env.JIRA_API_TOKEN;
-const RELEASE_TICKET = process.env.JIRA_RELEASE_TICKET;  // e.g. ADCMS-9999
+/**
+ * Reads and validates a required environment variable.
+ *
+ * @param {string} name Environment variable name.
+ * @returns {string} Trimmed environment variable value.
+ * @throws {Error} Thrown when the variable is missing or blank.
+ */
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value || !String(value).trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return String(value).trim();
+}
+
+const JIRA_BASE      = requireEnv('JIRA_BASE_URL').replace(/\/$/, '');
+const EMAIL          = requireEnv('JIRA_USER_EMAIL');
+const TOKEN          = requireEnv('JIRA_API_TOKEN');
+const RELEASE_TICKET = (process.env.JIRA_RELEASE_TICKET || '').trim();  // e.g. ADCMS-9999
 const RAW            = (process.env.RAW_TICKETS || '').split(',').map(t => t.trim()).filter(Boolean);
-const NEW_LABEL      = process.env.NEW_VERSION_LABEL;   // "AEM 2.02.0 - Phoenix"
-const PREV_LABEL     = process.env.PREV_VERSION_LABEL;  // "AEM 2.01.0 - Kraken"
+const NEW_LABEL      = requireEnv('NEW_VERSION_LABEL');   // "AEM 2.02.0 - Phoenix"
+const PREV_LABEL     = (process.env.PREV_VERSION_LABEL || '').trim();  // "AEM 2.01.0 - Kraken"
 const GH_OUTPUT      = process.env.GITHUB_OUTPUT;
 
 const AUTH = Buffer.from(`${EMAIL}:${TOKEN}`).toString('base64');
 
-// ── HTTP helper ───────────────────────────────────────────────────────────────
+/**
+ * Executes a Jira REST API GET request and parses the JSON response body.
+ *
+ * @param {string} path Jira REST API path relative to /rest/api/3/.
+ * @returns {Promise<object>} Parsed Jira API response payload.
+ */
 function jiraGet(path) {
   return new Promise((resolve, reject) => {
     const parsed = url.parse(`${JIRA_BASE}/rest/api/3/${path}`);
@@ -53,23 +73,35 @@ function jiraGet(path) {
         'Accept':        'application/json',
       },
     };
+
     const req = https.request(options, res => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         if (res.statusCode >= 400) {
           reject(new Error(`Jira API ${res.statusCode} for ${path}: ${data}`));
-        } else {
-          resolve(JSON.parse(data));
+          return;
+        }
+
+        try {
+          resolve(data ? JSON.parse(data) : {});
+        } catch (err) {
+          reject(new Error(`Failed to parse Jira response for ${path}: ${err.message}`));
         }
       });
     });
+
     req.on('error', reject);
     req.end();
   });
 }
 
-// ── Classify a single ticket ──────────────────────────────────────────────────
+/**
+ * Applies the release classification rules to a single Jira ticket.
+ *
+ * @param {string} ticketId Jira issue key to classify.
+ * @returns {Promise<{id: string, rule: string}>} Classification result for the ticket.
+ */
 async function classifyTicket(ticketId) {
   let issue;
   try {
@@ -123,17 +155,23 @@ async function classifyTicket(ticketId) {
   return { id: ticketId, rule: 'CONFIRMED' };
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+/**
+ * Classifies all extracted tickets, logs the outcome, and exports workflow outputs.
+ *
+ * @returns {Promise<void>} Resolves when classification and output export complete.
+ */
 async function main() {
   if (RAW.length === 0) {
-    console.log('No tickets to classify');
-    fs.appendFileSync(GH_OUTPUT, `confirmed_tickets=\nuntagged_open_tickets=\nticket_count=0\n`);
+    console.log('[Classify Tickets] No tickets to classify');
+    if (GH_OUTPUT) {
+      fs.appendFileSync(GH_OUTPUT, `confirmed_tickets=\nuntagged_open_tickets=\nticket_count=0\n`);
+    }
     return;
   }
 
-  console.log(`\nClassifying ${RAW.length} tickets against Jira API\n`);
+  console.log(`\n[Classify Tickets] Classifying ${RAW.length} tickets against Jira API\n`);
   console.log(`  Current fix version:  "${NEW_LABEL}"`);
-  console.log(`  Previous fix version: "${PREV_LABEL}"`);
+  console.log(`  Previous fix version: "${PREV_LABEL || 'not provided'}"`);
   if (RELEASE_TICKET) {
     console.log(`  Release ticket:       "${RELEASE_TICKET}" (will be excluded from results)\n`);
   } else {
@@ -171,12 +209,17 @@ async function main() {
   console.log(`Ignored (closed, no fix):   ${ignoredClosed.length} tickets - ${ignoredClosed.join(', ') || 'none'}`);
   console.log(`========================================\n`);
 
-  fs.appendFileSync(GH_OUTPUT, [
-    `confirmed_tickets=${confirmedFiltered.join(',')}`,
-    `untagged_open_tickets=${untaggedOpenFiltered.join(',')}`,
-    `ticket_count=${confirmedFiltered.length}`,
-    '',
-  ].join('\n'));
+  if (GH_OUTPUT) {
+    fs.appendFileSync(GH_OUTPUT, [
+      `confirmed_tickets=${confirmedFiltered.join(',')}`,
+      `untagged_open_tickets=${untaggedOpenFiltered.join(',')}`,
+      `ticket_count=${confirmedFiltered.length}`,
+      '',
+    ].join('\n'));
+  }
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+main().catch(err => {
+  console.error(`[Classify Tickets] Fatal error: ${err.message}`);
+  process.exit(1);
+});

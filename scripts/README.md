@@ -36,23 +36,35 @@ git commit -m "chore: add release cut automation workflow"
 git push origin develop
 ```
 
-### 2. Add Secrets in GitHub Enterprise
+### 2. Configure Repository Secrets and Variables
 
-Go to: **Repository → Settings → Secrets and variables → Actions → New repository secret**
+Go to: **Repository → Settings → Secrets and variables → Actions**
 
-| Secret | Example value | Where to get it |
-|--------|---------------|-----------------|
-| `GH_TOKEN` | `ghp_xxx...` | GitHub → Settings → Developer settings → Personal access tokens → `repo` + `workflow` scopes |
-| `JIRA_BASE_URL` | `https://jsw.ibm.com` | Your Jira instance URL |
-| `JIRA_USER_EMAIL` | `you@ibm.com` | Your IBM Jira login |
-| `JIRA_API_TOKEN` | `ATATT3x...` | Jira → Account Settings → Security → API tokens |
-| `JIRA_PROJECT_KEY` | `ADCMS` | Your Jira project key |
-| `ACM_CLIENT_ID` | `abc123...` | Adobe Developer Console → your Cloud Manager project |
-| `ACM_CLIENT_SECRET` | `xxx...` | Adobe Developer Console → your Cloud Manager project |
-| `ACM_ORG_ID` | `ABC123@AdobeOrg` | Adobe Developer Console → Org overview |
-| `ACM_PROGRAM_ID` | `12345` | Cloud Manager URL: `.../program/12345/...` |
-| `ACM_PIPELINE_ID` | `67890` | Cloud Manager → Pipelines → stage pipeline → URL |
-| `SLACK_WEBHOOK_URL` | `https://hooks.slack.com/...` | Slack → App Directory → Incoming Webhooks |
+Use **Secrets** for credentials/tokens and **Variables** for non-sensitive configuration.
+
+#### Recommended GitHub Actions Secrets
+
+| Secret | Example value | Purpose |
+|--------|---------------|---------|
+| `GH_TOKEN` | `ghp_xxx...` | GitHub PAT with repository access for checkout, PR creation, and PR polling |
+| `JIRA_API_TOKEN` | `ATATT3x...` | Jira API authentication |
+| `ACM_CLIENT_SECRET` | `xxx...` | Adobe Cloud Manager OAuth client secret |
+| `SLACK_BOT_TOKEN` | `xoxb-...` | Slack bot token used by `scripts/slack.js` |
+
+#### Recommended GitHub Actions Variables
+
+| Variable | Example value | Purpose |
+|----------|---------------|---------|
+| `JIRA_BASE_URL` | `https://jsw.ibm.com` | Jira instance base URL |
+| `JIRA_USER_EMAIL` | `you@ibm.com` | Jira user email for API authentication |
+| `JIRA_PROJECT_KEY` | `ADCMS` | Jira project key used in JQL and ticket parsing |
+| `ACM_CLIENT_ID` | `abc123...` | Adobe Cloud Manager OAuth client ID |
+| `ACM_ORG_ID` | `ABC123@AdobeOrg` | Adobe IMS organization ID |
+| `ACM_PROGRAM_ID` | `12345` | Adobe Cloud Manager program ID |
+| `ACM_PIPELINE_ID` | `67890` | Adobe Cloud Manager stage pipeline ID |
+| `SLACK_CHANNEL_ID` | `C01234567` | Slack channel ID for threaded notifications |
+
+> **Important:** Earlier versions of this documentation referenced `SLACK_WEBHOOK_URL`. The current workflow uses `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` instead.
 
 ### 3. Verify Your Self-Hosted Runner
 
@@ -91,6 +103,23 @@ The workflow derives these values automatically from the branch names:
 - Next release version → from `Next release branch`
 - Next release codename → from `Next release branch`
 - Previous release codename → from `Previous release branch`
+- Previous latest tag → `<previous-version>`
+- Previous prerelease tag → `<previous-version>-beta`
+- New prerelease tag → `<next-version>-beta`
+
+### Branch Naming Standard
+
+The workflow validates release branches using this convention:
+
+```text
+release-<major>.<minor>.<patch>-<codename>
+```
+
+Examples:
+- `release-2.02.0-loki`
+- `release-2.03.0-minotaur`
+
+If the branch format does not match this convention, the workflow fails early in the metadata derivation job.
 
 ---
 
@@ -98,6 +127,8 @@ The workflow derives these values automatically from the branch names:
 
 | Job | Description |
 |-----|-------------|
+| **Step 0 - Derive metadata** | Validates branch naming convention and derives versions, codenames, and tag names used by downstream jobs |
+| **Step 0a - Slack start** | Posts the initial threaded Slack message for workflow visibility |
 | **Step 1 - Back-merge** | Merges previous release branch into `develop` via a pull request (always - even for clean merges). On conflict: conflict markers committed, pull request raised, Slack alert sent. |
 | **Step 1b - Wait for PR merge** | Actively polls the back-merge pull request status every 30 seconds until it is merged. Workflow automatically continues once pull request is merged into `develop`. Times out after 2 hours if not merged. |
 | **Step 2 - Cut branch** | Creates new release branch from `develop` and pushes to repository |
@@ -106,6 +137,68 @@ The workflow derives these values automatically from the branch names:
 | **Step 5 - Jira** | Extracts ticket IDs from git log between tags, applies 4 classification rules via Jira API, creates new filter, updates release ticket description |
 | **Step 6 - PR notify** | Comments on every open pull request targeting `develop` with retargeting instructions |
 | **Step 7 - Slack** | Posts complete release cut summary to release channel |
+
+---
+
+## Operational Notes
+
+### Dry Run Behavior
+
+When `dry_run=true`, the workflow still performs validation, metadata derivation, and read-only analysis where possible, but it skips mutating operations such as:
+- pushing branches
+- creating pull requests
+- creating/deleting releases and tags
+- patching Adobe Cloud Manager pipeline configuration
+- triggering Adobe Cloud Manager execution
+- updating Jira filters/tickets
+- posting Slack notifications
+
+Use dry run before every production release cut when changing workflow logic.
+
+### Logging and Error Handling Improvements
+
+The workflow and scripts now follow these operational practices:
+- fail fast on missing required environment variables
+- validate release branch naming before any downstream job runs
+- centralize derived release metadata in one workflow job
+- emit structured log messages for easier troubleshooting
+- guard JSON parsing from external APIs
+- avoid writing to `GITHUB_OUTPUT` when it is unavailable
+- keep job names stable and enterprise-readable across runs
+
+### Recommended Operational Sequence
+
+Before triggering the workflow:
+1. Confirm the previous release branch exists remotely.
+2. Confirm the next release branch name follows the standard naming convention.
+3. Confirm the Jira fix-version label already exists in Jira.
+4. Confirm the Jira release ticket exists and is editable by the bot user.
+5. Confirm Adobe Cloud Manager program/pipeline identifiers are correct.
+6. Confirm Slack bot access to the target channel.
+
+After the workflow completes:
+1. Verify the back-merge PR was merged correctly.
+2. Verify the new release branch exists remotely.
+3. Verify GitHub releases/tags were created as expected.
+4. Verify the Adobe Cloud Manager pipeline now points to the new release branch.
+5. Verify the Jira filter and release ticket description were updated.
+6. Verify PR comments and Slack summary were posted.
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Workflow fails in metadata derivation | Verify both branch inputs follow `release-x.y.z-codename` |
+| Runner queued but never starts | Check runner status: Repository → Settings → Actions → Runners |
+| `node` not found on runner | Install Node.js on the runner machine |
+| Back-merge PR polling times out | Merge the PR into `develop`, then re-run the workflow if needed |
+| ACM pipeline trigger returns non-201 | Verify `ACM_PIPELINE_ID`, `ACM_PROGRAM_ID`, and Adobe credentials |
+| No tickets found from tag compare | Ensure commit messages contain `ADCMS-XXXX` pattern; cherry-picks without ticket references need manual addition |
+| Filter creation fails | Verify Jira project key, Jira permissions, and fix-version existence |
+| Release ticket update fails | Verify the Jira release ticket exists and the bot user can edit/comment on it |
+| Slack notification not arriving | Verify `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`, and bot membership in the target channel |
 
 ---
 
@@ -179,9 +272,12 @@ Step 2 starts (create release branch)
 
 | Problem | Solution |
 |---------|----------|
+| Workflow fails in metadata derivation | Verify both branch inputs follow `release-x.y.z-codename` |
 | Runner queued but never starts | Check runner status: Repository → Settings → Actions → Runners |
 | `node` not found on runner | Install Node.js on the runner machine |
-| ACM pipeline trigger returns non-201 | Verify `ACM_PIPELINE_ID` and `ACM_PROGRAM_ID` in Cloud Manager URL |
+| Back-merge PR polling times out | Merge the PR into `develop`, then re-run the workflow if needed |
+| ACM pipeline trigger returns non-201 | Verify `ACM_PIPELINE_ID`, `ACM_PROGRAM_ID`, and Adobe credentials |
 | No tickets found from tag compare | Ensure commit messages contain `ADCMS-XXXX` pattern; cherry-picks without ticket references need manual addition |
-| Filter creation fails | Verify Jira project key and permissions |
-| Slack notification not arriving | Test webhook: `curl -X POST $SLACK_WEBHOOK_URL -d '{"text":"test"}'` |
+| Filter creation fails | Verify Jira project key, Jira permissions, and fix-version existence |
+| Release ticket update fails | Verify the Jira release ticket exists and the bot user can edit/comment on it |
+| Slack notification not arriving | Verify `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`, and bot membership in the target channel |

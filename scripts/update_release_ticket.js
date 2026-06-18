@@ -31,20 +31,43 @@
 
 const https = require('https');
 const url   = require('url');
+const fs    = require('fs');
 
-const JIRA_BASE     = process.env.JIRA_BASE_URL.replace(/\/$/, '');
-const EMAIL         = process.env.JIRA_USER_EMAIL;
-const TOKEN         = process.env.JIRA_API_TOKEN;
-const PROJECT_KEY   = process.env.JIRA_PROJECT_KEY;
-const RELEASE_KEY   = process.env.JIRA_RELEASE_TICKET;
+/**
+ * Reads and validates a required environment variable.
+ *
+ * @param {string} name Environment variable name.
+ * @returns {string} Trimmed environment variable value.
+ * @throws {Error} Thrown when the variable is missing or blank.
+ */
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value || !String(value).trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return String(value).trim();
+}
+
+const JIRA_BASE     = requireEnv('JIRA_BASE_URL').replace(/\/$/, '');
+const EMAIL         = requireEnv('JIRA_USER_EMAIL');
+const TOKEN         = requireEnv('JIRA_API_TOKEN');
+const PROJECT_KEY   = requireEnv('JIRA_PROJECT_KEY');
+const RELEASE_KEY   = requireEnv('JIRA_RELEASE_TICKET');
 const FILTER_URL    = process.env.FILTER_URL || `${JIRA_BASE}/issues/?filter=unknown`;
-const NEW_LABEL     = process.env.NEW_VERSION_LABEL;
+const NEW_LABEL     = requireEnv('NEW_VERSION_LABEL');
 const UNTAGGED_OPEN = (process.env.UNTAGGED_OPEN_TICKETS || '').split(',').map(t => t.trim()).filter(Boolean);
 const DRY_RUN       = process.env.DRY_RUN === 'true';
 
 const AUTH = Buffer.from(`${EMAIL}:${TOKEN}`).toString('base64');
 
-// ── HTTP helper ───────────────────────────────────────────────────────────────
+/**
+ * Executes a Jira REST API request and parses the JSON response body.
+ *
+ * @param {string} method HTTP method to use.
+ * @param {string} path Jira API path relative to /rest/api/3/.
+ * @param {object} [body] Optional JSON payload for write operations.
+ * @returns {Promise<object|Array>} Parsed Jira API response payload.
+ */
 function request(method, path, body) {
   return new Promise((resolve, reject) => {
     const parsed  = url.parse(`${JIRA_BASE}/rest/api/3/${path}`);
@@ -67,8 +90,13 @@ function request(method, path, body) {
       res.on('end', () => {
         if (res.statusCode >= 400) {
           reject(new Error(`Jira ${res.statusCode} on ${method} ${path}: ${data}`));
-        } else {
+          return;
+        }
+
+        try {
           resolve(data ? JSON.parse(data) : {});
+        } catch (err) {
+          reject(new Error(`Failed to parse Jira response for ${method} ${path}: ${err.message}`));
         }
       });
     });
@@ -79,7 +107,11 @@ function request(method, path, body) {
   });
 }
 
-// ── Fetch all tickets from Jira with the new fix version ─────────────────────
+/**
+ * Fetches every Jira issue currently tagged with the release fix version.
+ *
+ * @returns {Promise<string[]>} Sorted Jira issue keys for the release, excluding the release ticket itself.
+ */
 async function fetchAllReleaseTickets() {
   const jql = (
     `project = ${PROJECT_KEY} AND ` +
@@ -147,13 +179,12 @@ async function fetchAllReleaseTickets() {
   return filtered;
 }
 
-// ── Build ADF (Atlassian Document Format) description ─────────────────────────
-// Matches the format in your screenshot exactly:
-//   Release Filter: <link>
-//   (blank line)
-//   Release Tickets:
-//   <link per ticket>
-//   ...
+/**
+ * Builds the Atlassian Document Format payload for the release ticket description.
+ *
+ * @param {string[]} releaseTickets Jira issue keys included in the release.
+ * @returns {object} ADF document payload ready to send to Jira.
+ */
 function buildDescription(releaseTickets) {
   const filterURL  = FILTER_URL;
 
@@ -226,7 +257,11 @@ function buildDescription(releaseTickets) {
   };
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+/**
+ * Updates the Jira release ticket description and posts a summary comment.
+ *
+ * @returns {Promise<void>} Resolves when the release ticket update flow completes.
+ */
 async function main() {
   const GH_OUTPUT = process.env.GITHUB_OUTPUT;
   
@@ -241,7 +276,6 @@ async function main() {
 
   // Output the actual ticket count for the workflow
   if (GH_OUTPUT) {
-    const fs = require('fs');
     fs.appendFileSync(GH_OUTPUT, `jira_ticket_count=${releaseTickets.length}\n`);
     console.log(`  Wrote ticket count to GITHUB_OUTPUT: ${releaseTickets.length}`);
   }
@@ -287,4 +321,7 @@ async function main() {
   console.log(`Comment posted on ${RELEASE_KEY}`);
 }
 
-main().catch(err => { console.error(err.message); process.exit(1); });
+main().catch(err => {
+  console.error(`[Release Ticket] Fatal error: ${err.message}`);
+  process.exit(1);
+});

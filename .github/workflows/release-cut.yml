@@ -57,9 +57,90 @@ env:
 # JOB 0 — Start Slack thread
 # ============================================================
 jobs:
-  slack_start:
-    name: "0 · Slack — Start release cut thread"
+  derive_release_metadata:
+    name: "0 · Derive release metadata"
     runs-on: ubuntu-latest
+    outputs:
+      prev_version: ${{ steps.derive.outputs.prev_version }}
+      prev_codename: ${{ steps.derive.outputs.prev_codename }}
+      prev_version_label: ${{ steps.derive.outputs.prev_version_label }}
+      prev_latest_tag: ${{ steps.derive.outputs.prev_latest_tag }}
+      prev_prerelease_tag: ${{ steps.derive.outputs.prev_prerelease_tag }}
+      new_version: ${{ steps.derive.outputs.new_version }}
+      new_codename: ${{ steps.derive.outputs.new_codename }}
+      new_prerelease_tag: ${{ steps.derive.outputs.new_prerelease_tag }}
+
+    steps:
+      - name: Validate branch naming convention and derive metadata
+        id: derive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PREV_BRANCH="${{ inputs.prev_release_branch }}"
+          NEXT_BRANCH="${{ inputs.next_release_branch }}"
+          NEW_VERSION_LABEL="${{ inputs.new_version_label }}"
+
+          BRANCH_PATTERN='^release-([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z0-9._-]+)$'
+
+          if [[ ! "$PREV_BRANCH" =~ $BRANCH_PATTERN ]]; then
+            echo "::error::Invalid previous release branch format: $PREV_BRANCH"
+            echo "::error::Expected format: release-x.y.z-codename"
+            exit 1
+          fi
+
+          if [[ ! "$NEXT_BRANCH" =~ $BRANCH_PATTERN ]]; then
+            echo "::error::Invalid next release branch format: $NEXT_BRANCH"
+            echo "::error::Expected format: release-x.y.z-codename"
+            exit 1
+          fi
+
+          PREV_VERSION="${BASH_REMATCH[1]}"
+          PREV_CODENAME_RAW="${BASH_REMATCH[2]}"
+
+          [[ "$NEXT_BRANCH" =~ $BRANCH_PATTERN ]]
+          NEW_VERSION="${BASH_REMATCH[1]}"
+          NEW_CODENAME_RAW="${BASH_REMATCH[2]}"
+
+          PREV_CODENAME_TITLE=$(echo "$PREV_CODENAME_RAW" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+          NEW_CODENAME_TITLE=$(echo "$NEW_CODENAME_RAW" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+
+          PREV_VERSION_LABEL="AEM ${PREV_VERSION} - ${PREV_CODENAME_TITLE}"
+          PREV_LATEST_TAG="${PREV_VERSION}"
+          PREV_PRERELEASE_TAG="${PREV_VERSION}-beta"
+          NEW_PRERELEASE_TAG="${NEW_VERSION}-beta"
+
+          if [[ "$NEW_VERSION_LABEL" != "AEM ${NEW_VERSION} - ${NEW_CODENAME_TITLE}" ]]; then
+            echo "::warning::Provided new_version_label does not match derived branch metadata"
+            echo "::warning::Derived expected label: AEM ${NEW_VERSION} - ${NEW_CODENAME_TITLE}"
+            echo "::warning::Provided label: ${NEW_VERSION_LABEL}"
+          fi
+
+          {
+            echo "prev_version=${PREV_VERSION}"
+            echo "prev_codename=${PREV_CODENAME_TITLE}"
+            echo "prev_version_label=${PREV_VERSION_LABEL}"
+            echo "prev_latest_tag=${PREV_LATEST_TAG}"
+            echo "prev_prerelease_tag=${PREV_PRERELEASE_TAG}"
+            echo "new_version=${NEW_VERSION}"
+            echo "new_codename=${NEW_CODENAME_TITLE}"
+            echo "new_prerelease_tag=${NEW_PRERELEASE_TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "[Metadata] Previous branch: ${PREV_BRANCH}"
+          echo "[Metadata] Previous version: ${PREV_VERSION}"
+          echo "[Metadata] Previous codename: ${PREV_CODENAME_TITLE}"
+          echo "[Metadata] Next branch: ${NEXT_BRANCH}"
+          echo "[Metadata] Next version: ${NEW_VERSION}"
+          echo "[Metadata] Next codename: ${NEW_CODENAME_TITLE}"
+          echo "[Metadata] Previous latest tag: ${PREV_LATEST_TAG}"
+          echo "[Metadata] Previous prerelease tag: ${PREV_PRERELEASE_TAG}"
+          echo "[Metadata] New prerelease tag: ${NEW_PRERELEASE_TAG}"
+
+  slack_start:
+    name: "0a · Initialize Slack thread"
+    runs-on: ubuntu-latest
+    needs: derive_release_metadata
     outputs:
       thread_ts: ${{ steps.notify.outputs.slack_thread_ts }}
 
@@ -86,9 +167,9 @@ jobs:
 # JOB 1 — Back-merge previous release branch → develop (always via PR)
 # ============================================================
   back_merge:
-    name: "1 · Back-merge ${{ inputs.prev_release_branch }} → develop (PR)"
+    name: "1 · Back-merge previous release → develop"
     runs-on: ubuntu-latest
-    needs: slack_start
+    needs: [derive_release_metadata, slack_start]
     outputs:
       had_conflict: ${{ steps.merge.outputs.had_conflict }}
       conflict_files: ${{ steps.merge.outputs.conflict_files }}
@@ -256,7 +337,7 @@ jobs:
 # after 2 hours if the PR is not merged.
 # ============================================================
   await_pr_merge:
-    name: "1b · ⏸ Waiting for back-merge PR to be merged"
+    name: "1b · Wait for back-merge PR merge"
     runs-on: ubuntu-latest
     needs: back_merge
 
@@ -331,9 +412,9 @@ jobs:
 # JOB 2 — Cut new release branch from develop
 # ============================================================
   cut_release_branch:
-    name: "2 · Cut next release branch from develop"
+    name: "2 · Cut next release branch"
     runs-on: ubuntu-latest
-    needs: await_pr_merge
+    needs: [derive_release_metadata, await_pr_merge]
 
     steps:
       - name: Checkout develop
@@ -382,8 +463,7 @@ jobs:
 
       - name: Delete previous pre-release tag
         run: |
-          PREV_VERSION=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')
-          TAG="${PREV_VERSION}-beta"
+          TAG="${{ needs.derive_release_metadata.outputs.prev_prerelease_tag }}"
           [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would delete tag: $TAG" && exit 0
           gh release delete "$TAG" --yes 2>/dev/null || true
           git push origin ":refs/tags/$TAG" 2>/dev/null || true
@@ -391,9 +471,9 @@ jobs:
 
       - name: Create latest tag for previous release
         run: |
-          PREV_VERSION=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')
-          PREV_CODENAME=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed -E 's/^release-[0-9]+\.[0-9]+\.[0-9]+-(.*)$/\1/' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-          TAG="${PREV_VERSION}"
+          PREV_VERSION="${{ needs.derive_release_metadata.outputs.prev_version }}"
+          PREV_CODENAME="${{ needs.derive_release_metadata.outputs.prev_codename }}"
+          TAG="${{ needs.derive_release_metadata.outputs.prev_latest_tag }}"
 
           if [ "$DRY_RUN" = "true" ]; then
             echo "[DRY RUN] Would create latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}"
@@ -409,9 +489,9 @@ jobs:
 
       - name: Create pre-release tag for new release
         run: |
-          NEW_VERSION=$(echo "${{ env.NEW_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')
-          NEW_CODENAME=$(echo "${{ env.NEW_RELEASE_BRANCH }}" | sed -E 's/^release-[0-9]+\.[0-9]+\.[0-9]+-(.*)$/\1/' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-          TAG="${NEW_VERSION}-beta"
+          NEW_VERSION="${{ needs.derive_release_metadata.outputs.new_version }}"
+          NEW_CODENAME="${{ needs.derive_release_metadata.outputs.new_codename }}"
+          TAG="${{ needs.derive_release_metadata.outputs.new_prerelease_tag }}"
 
           if [ "$DRY_RUN" = "true" ]; then
             echo "[DRY RUN] Would create pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}"
@@ -430,9 +510,9 @@ jobs:
 # JOB 4 — Adobe Cloud Manager: update pipeline + trigger stage
 # ============================================================
   adobe_cloud_manager:
-    name: "4 · Adobe Cloud Manager — update branch + trigger stage"
+    name: "4 · Adobe Cloud Manager"
     runs-on: ubuntu-latest
-    needs: rotate_tags
+    needs: [derive_release_metadata, rotate_tags]
 
     steps:
       - name: Get Adobe IMS access token
@@ -494,9 +574,9 @@ jobs:
 #          and update release ticket description
 # ============================================================
   jira_release:
-    name: "5 · Jira — compare tags, classify tickets, update filter + release ticket"
+    name: "5 · Jira release updates"
     runs-on: ubuntu-latest
-    needs: rotate_tags
+    needs: [derive_release_metadata, rotate_tags]
     outputs:
       confirmed_tickets: ${{ steps.classify.outputs.confirmed_tickets }}
       untagged_open_tickets: ${{ steps.classify.outputs.untagged_open_tickets }}
@@ -515,8 +595,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          PREV_TAG="$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')"   # e.g. 2.02.0
-          NEW_TAG="$(echo "${{ env.NEW_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')-beta"  # e.g. 2.03.0-beta
+          PREV_TAG="${{ needs.derive_release_metadata.outputs.prev_latest_tag }}"      # e.g. 2.02.0
+          NEW_TAG="${{ needs.derive_release_metadata.outputs.new_prerelease_tag }}"     # e.g. 2.03.0-beta
 
           echo "Comparing $PREV_TAG → $NEW_TAG"
 
@@ -542,7 +622,7 @@ jobs:
           JIRA_API_TOKEN:      ${{ secrets.JIRA_API_TOKEN }}
           RAW_TICKETS:         ${{ steps.extract.outputs.raw_tickets }}
           NEW_VERSION_LABEL:   ${{ env.NEW_VERSION_LABEL }}
-          PREV_VERSION_LABEL:  ${{ env.PREV_VERSION_LABEL }}
+          PREV_VERSION_LABEL:  ${{ needs.derive_release_metadata.outputs.prev_version_label }}
           JIRA_RELEASE_TICKET: ${{ inputs.jira_release_ticket }}
 
       - name: Create new Jira release filter
@@ -575,9 +655,10 @@ jobs:
 # JOB 6 — Notify open PRs targeting develop
 # ============================================================
   notify_open_prs:
-    name: "6 · Notify devs — open PRs targeting develop"
+    name: "6 · Notify open PRs"
     runs-on: ubuntu-latest
-    needs: [jira_release, adobe_cloud_manager]
+    needs: [derive_release_metadata, jira_release, adobe_cloud_manager]
+    needs: [derive_release_metadata, jira_release, adobe_cloud_manager]
 
     steps:
       - name: Checkout
@@ -594,7 +675,7 @@ jobs:
           GITHUB_RUN_NUMBER:  ${{ github.run_number }}
           GITHUB_RUN_ID:      ${{ github.run_id }}
           NEW_RELEASE_BRANCH: ${{ env.NEW_RELEASE_BRANCH }}
-          NEW_VERSION:        ${{ env.NEW_VERSION }}
+          NEW_VERSION:        ${{ needs.derive_release_metadata.outputs.new_version }}
           NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
           JIRA_BASE_URL:      ${{ vars.JIRA_BASE_URL }}
           JIRA_USER_EMAIL:    ${{ vars.JIRA_USER_EMAIL }}
@@ -606,9 +687,9 @@ jobs:
 # JOB 7 — Final Slack summary
 # ============================================================
   notify_slack_final:
-    name: "7 · Slack — release cut summary (threaded)"
+    name: "7 · Slack summary"
     runs-on: ubuntu-latest
-    needs: [slack_start, adobe_cloud_manager, jira_release, notify_open_prs]
+    needs: [derive_release_metadata, slack_start, adobe_cloud_manager, jira_release, notify_open_prs]
     if: always()
 
     steps:
@@ -641,8 +722,8 @@ jobs:
           NOTIFICATION_TYPE:    summary
           NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
           NEW_RELEASE_BRANCH:   ${{ env.NEW_RELEASE_BRANCH }}
-          NEW_PRERELEASE_TAG:   ${{ env.NEW_RELEASE_BRANCH }}
-          PREV_LATEST_TAG:      ${{ env.PREV_RELEASE_BRANCH }}
+          NEW_PRERELEASE_TAG:   ${{ needs.derive_release_metadata.outputs.new_prerelease_tag }}
+          PREV_LATEST_TAG:      ${{ needs.derive_release_metadata.outputs.prev_latest_tag }}
           PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
           TICKET_COUNT:         ${{ needs.jira_release.outputs.ticket_count }}
           FILTER_URL:           ${{ needs.jira_release.outputs.filter_url }}
