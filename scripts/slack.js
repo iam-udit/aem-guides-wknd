@@ -290,6 +290,8 @@ function buildSummaryReply() {
   const ticketCount = process.env.TICKET_COUNT || '0';
   const filterUrl = process.env.FILTER_URL || '';
   const releaseTicket = process.env.JIRA_RELEASE_TICKET || '';
+  const jiraBase = process.env.JIRA_BASE_URL || '';
+  const releaseTicketUrl = jiraBase && releaseTicket ? `${jiraBase}/browse/${releaseTicket}` : '';
   const duration = process.env.WORKFLOW_DURATION || 'N/A';
   const runUrl = process.env.RUN_URL || '';
   const actor = process.env.GITHUB_ACTOR || 'unknown';
@@ -344,7 +346,7 @@ function buildSummaryReply() {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*📊 Jira Updates:*\n• Tickets confirmed: ${ticketCount} tickets tagged to fix version\n• Untagged tickets: ${untaggedText}\n• <${filterUrl}|View Filter>\n• Release ticket: ${releaseTicket} - description updated`
+            text: `*📊 Jira Updates:*\n• Tickets confirmed: ${ticketCount} tickets tagged to fix version\n• Untagged tickets: ${untaggedText}\n• <${filterUrl}|View Filter>\n• <${releaseTicketUrl}|${releaseTicket}> - description updated`
           }
         },
         {

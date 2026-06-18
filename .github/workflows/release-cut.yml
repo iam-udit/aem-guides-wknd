@@ -514,7 +514,7 @@ jobs:
     outputs:
       confirmed_tickets: ${{ steps.classify.outputs.confirmed_tickets }}
       untagged_open_tickets: ${{ steps.classify.outputs.untagged_open_tickets }}
-      ticket_count: ${{ steps.classify.outputs.ticket_count }}
+      ticket_count: ${{ steps.update_ticket.outputs.jira_ticket_count }}
       filter_url: ${{ steps.create_filter.outputs.filter_url }}
 
     steps:
@@ -571,6 +571,7 @@ jobs:
           DRY_RUN:            ${{ env.DRY_RUN }}
 
       - name: Update release ticket description
+        id: update_ticket
         run: node scripts/update_release_ticket.js
         env:
           JIRA_BASE_URL:          ${{ vars.JIRA_BASE_URL }}
@@ -660,6 +661,7 @@ jobs:
           TICKET_COUNT:         ${{ needs.jira_release.outputs.ticket_count }}
           FILTER_URL:           ${{ needs.jira_release.outputs.filter_url }}
           JIRA_RELEASE_TICKET:  ${{ inputs.jira_release_ticket }}
+          JIRA_BASE_URL:        ${{ vars.JIRA_BASE_URL }}
           UNTAGGED_TICKETS:     ${{ needs.jira_release.outputs.untagged_open_tickets }}
           ACM_RESULT:           ${{ needs.adobe_cloud_manager.result }}
           JIRA_RESULT:          ${{ needs.jira_release.result }}

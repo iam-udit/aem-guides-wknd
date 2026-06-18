@@ -228,6 +228,8 @@ function buildDescription(releaseTickets) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
+  const GH_OUTPUT = process.env.GITHUB_OUTPUT;
+  
   console.log(`\n[Release Ticket] Updating ${RELEASE_KEY}`);
   console.log(`  Fix version:   ${NEW_LABEL}`);
 
@@ -236,6 +238,13 @@ async function main() {
   
   console.log(`  Release tickets: ${releaseTickets.length} tickets`);
   console.log(`  Untagged open:   ${UNTAGGED_OPEN.length} tickets (from git commits)`);
+
+  // Output the actual ticket count for the workflow
+  if (GH_OUTPUT) {
+    const fs = require('fs');
+    fs.appendFileSync(GH_OUTPUT, `jira_ticket_count=${releaseTickets.length}\n`);
+    console.log(`  Wrote ticket count to GITHUB_OUTPUT: ${releaseTickets.length}`);
+  }
 
   const description = buildDescription(releaseTickets);
 
