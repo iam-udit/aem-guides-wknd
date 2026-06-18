@@ -658,7 +658,6 @@ jobs:
     name: "6 · Notify open PRs"
     runs-on: ubuntu-latest
     needs: [derive_release_metadata, jira_release, adobe_cloud_manager]
-    needs: [derive_release_metadata, jira_release, adobe_cloud_manager]
 
     steps:
       - name: Checkout
