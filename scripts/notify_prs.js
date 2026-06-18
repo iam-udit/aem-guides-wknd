@@ -37,6 +37,12 @@ const JIRA_EMAIL    = process.env.JIRA_USER_EMAIL;
 const JIRA_TOKEN    = process.env.JIRA_API_TOKEN;
 const PROJECT_KEY   = process.env.JIRA_PROJECT_KEY;
 
+// Fail fast if GH_TOKEN is missing
+if (!TOKEN) {
+  console.error('GH_TOKEN is not set. Set the GH_TOKEN secret for this workflow.');
+  process.exit(1);
+}
+
 // Determine API base URL based on server
 const GHE_HOST = SERVER_URL.replace(/^https?:\/\//, '');
 const API_BASE = GHE_HOST === 'github.com'
@@ -48,6 +54,7 @@ const GH_HEADERS = {
   'Accept':               'application/vnd.github+json',
   'X-GitHub-Api-Version': '2022-11-28',
   'Content-Type':         'application/json',
+  'User-Agent':           `ADCMS Release Bot (release-cut run ${RUN_NUMBER || RUN_ID || 'local'})`,
 };
 
 const JIRA_AUTH = Buffer.from(`${JIRA_EMAIL}:${JIRA_TOKEN}`).toString('base64');
