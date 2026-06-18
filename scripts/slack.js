@@ -2,37 +2,35 @@
 /**
  * slack.js
  * --------
- * Handles all Slack notifications for the release cut workflow.
- * Using Node.js instead of curl inline JSON avoids all shell
- * escaping and special character issues entirely.
+ * Handles all Slack notifications for the release cut workflow using threaded messages.
+ * 
+ * Thread Structure:
+ * 1. Main thread message - posted at workflow start
+ * 2. Back-merge reply - posted after back-merge completes
+ * 3. Final summary reply - posted at workflow end
  *
- * Environment variables always required:
+ * Environment variables:
  *   SLACK_WEBHOOK_URL
- *   NOTIFICATION_TYPE   One of:
- *                         conflict  - back-merge conflict detected
- *                         clean_pr  - back-merge clean, PR raised
- *                         summary   - final release cut summary
- *
- * Additional environment variables per type:
- *
- *   conflict:
- *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, GITHUB_ACTOR,
- *     CONFLICT_FILES (comma-separated), PR_URL
- *
- *   clean_pr:
- *     NEW_VERSION_LABEL, PR_URL, GITHUB_ACTOR
- *
- *   summary:
+ *   NOTIFICATION_TYPE   One of: start | backmerge | summary
+ *   
+ *   For 'start':
+ *     NEW_VERSION_LABEL, GITHUB_ACTOR, RUN_NUMBER, RUN_URL
+ *   
+ *   For 'backmerge':
+ *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, PR_URL, HAD_CONFLICT, 
+ *     CONFLICT_FILES (comma-separated), THREAD_TS (from start message)
+ *   
+ *   For 'summary':
  *     NEW_VERSION_LABEL, NEW_RELEASE_BRANCH, NEW_PRERELEASE_TAG,
- *     PREV_LATEST_TAG, PREV_RELEASE_BRANCH,
- *     TICKET_COUNT, FILTER_URL, JIRA_RELEASE_TICKET,
- *     UNTAGGED_TICKETS (comma-separated, may be empty),
- *     ACM_RESULT, JIRA_RESULT, PRS_RESULT,
- *     GITHUB_ACTOR, RUN_NUMBER, RUN_URL
+ *     PREV_LATEST_TAG, PREV_RELEASE_BRANCH, TICKET_COUNT, FILTER_URL,
+ *     JIRA_RELEASE_TICKET, UNTAGGED_TICKETS, ACM_RESULT, JIRA_RESULT,
+ *     PRS_RESULT, GITHUB_ACTOR, RUN_NUMBER, RUN_URL, WORKFLOW_DURATION,
+ *     THREAD_TS (from start message)
  */
 
 const https = require('https');
 const url   = require('url');
+const fs    = require('fs');
 
 const WEBHOOK  = process.env.SLACK_WEBHOOK_URL;
 const TYPE     = process.env.NOTIFICATION_TYPE;
@@ -62,7 +60,13 @@ function postToSlack(payload) {
         if (res.statusCode !== 200) {
           reject(new Error(`Slack returned HTTP ${res.statusCode}: ${data}`));
         } else {
-          resolve(data);
+          // Slack returns 'ok' or a JSON with ts (timestamp) for threaded messages
+          try {
+            const response = JSON.parse(data);
+            resolve(response);
+          } catch {
+            resolve({ ok: data === 'ok' });
+          }
         }
       });
     });
@@ -73,61 +77,206 @@ function postToSlack(payload) {
   });
 }
 
-// ── field helper — always returns a valid Slack field object ──────────────────
-function field(title, value, short = false) {
-  return { title, value: value || '—', short };
-}
-
-// ── Notification builders ─────────────────────────────────────────────────────
-
-function buildConflict() {
-  const conflictFiles = (process.env.CONFLICT_FILES || '')
-    .split(',')
-    .map(f => f.trim())
-    .filter(Boolean);
-
-  const filesText = conflictFiles.length > 0
-    ? conflictFiles.map(f => `• ${f}`).join('\n')
-    : 'Unknown — check the PR for details';
+// ── Build start message (main thread) ─────────────────────────────────────────
+function buildStartMessage() {
+  const runUrl = process.env.RUN_URL || '';
+  const actor = process.env.GITHUB_ACTOR || 'unknown';
+  const runNumber = process.env.RUN_NUMBER || '?';
+  const release = process.env.NEW_VERSION_LABEL || '';
 
   return {
-    text: '*Release Cut - Merge Conflict Action Required*',
-    attachments: [{
-      color: 'warning',
-      fields: [
-        field('Release',           process.env.NEW_VERSION_LABEL,    true),
-        field('Triggered by',      process.env.GITHUB_ACTOR,         true),
-        field('Back-merge',        `\`${process.env.PREV_RELEASE_BRANCH}\` to \`develop\``),
-        field('Conflicting files', filesText),
-        field('Pull request',      process.env.PR_URL),
-        field('Next step',         'Resolve the conflicts, merge the pull request into develop. The workflow will automatically continue once the pull request is merged.'),
-      ],
-      footer: `Run #${process.env.RUN_NUMBER || '?'}`,
-    }],
+    text: `🚀 Release Cut Started: ${release}`,
+    blocks: [
+      {
+        type: 'header',
+        text: {
+          type: 'plain_text',
+          text: `🚀 Release Cut Started: ${release}`,
+          emoji: true
+        }
+      },
+      {
+        type: 'section',
+        fields: [
+          {
+            type: 'mrkdwn',
+            text: `*Workflow Run:*\n#${runNumber}`
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Triggered By:*\n@${actor}`
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Status:*\nIn Progress ⏳`
+          }
+        ]
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*📋 Steps:*\n⏳ Back-merge previous release → develop\n⏸️ Cut new release branch\n⏸️ Rotate tags\n⏸️ Adobe Cloud Manager pipeline\n⏸️ Jira updates\n⏸️ PR notifications\n⏸️ Final summary`
+        }
+      },
+      {
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: {
+              type: 'plain_text',
+              text: '🔗 View Workflow',
+              emoji: true
+            },
+            url: runUrl
+          }
+        ]
+      }
+    ]
   };
 }
 
-function buildCleanPR() {
-  return {
-    text: '*Release Cut - Back-merge Pull Request Raised (No Conflicts)*',
-    attachments: [{
-      color: 'good',
-      fields: [
-        field('Release',        process.env.NEW_VERSION_LABEL, true),
-        field('Triggered by',   process.env.GITHUB_ACTOR,      true),
-        field('Pull request',   process.env.PR_URL),
-        field('Action required', 'Review and merge the pull request into develop. The workflow will automatically continue once the pull request is merged.'),
-      ],
-      footer: `Run #${process.env.RUN_NUMBER || '?'}`,
-    }],
-  };
+// ── Build back-merge reply (thread reply) ─────────────────────────────────────
+function buildBackmergeReply() {
+  const hadConflict = process.env.HAD_CONFLICT === 'true';
+  const prUrl = process.env.PR_URL || '';
+  const prevBranch = process.env.PREV_RELEASE_BRANCH || '';
+  const threadTs = process.env.THREAD_TS;
+
+  if (!threadTs) {
+    console.warn('Warning: THREAD_TS not provided, message will not be threaded');
+  }
+
+  if (hadConflict) {
+    const conflictFiles = (process.env.CONFLICT_FILES || '')
+      .split(',')
+      .map(f => f.trim())
+      .filter(Boolean)
+      .map(f => `• \`${f}\``)
+      .join('\n');
+
+    return {
+      thread_ts: threadTs,
+      text: `⚠️ Back-merge Conflicts Detected`,
+      blocks: [
+        {
+          type: 'header',
+          text: {
+            type: 'plain_text',
+            text: '⚠️ Back-merge Conflicts Detected',
+            emoji: true
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `Back-merge PR created: \`${prevBranch}\` → \`develop\``
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Conflicting files:*\n${conflictFiles || 'Unknown — check the PR for details'}`
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Action Required:*\n1. Check out the back-merge branch\n2. Resolve all conflict markers\n3. Commit and push the resolution\n4. Merge the PR into \`develop\`\n5. Workflow will automatically continue once merged`
+          }
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: '🔗 View PR',
+                emoji: true
+              },
+              url: prUrl,
+              style: 'danger'
+            }
+          ]
+        }
+      ]
+    };
+  } else {
+    return {
+      thread_ts: threadTs,
+      text: `✅ Back-merge Completed (No Conflicts)`,
+      blocks: [
+        {
+          type: 'header',
+          text: {
+            type: 'plain_text',
+            text: '✅ Back-merge Completed (No Conflicts)',
+            emoji: true
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `Back-merge PR created: \`${prevBranch}\` → \`develop\``
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Action Required:*\n• Review and merge the PR into \`develop\`\n• Workflow will automatically continue once merged`
+          }
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: '🔗 View PR',
+                emoji: true
+              },
+              url: prUrl,
+              style: 'primary'
+            }
+          ]
+        }
+      ]
+    };
+  }
 }
 
-function buildSummary() {
-  const acm   = process.env.ACM_RESULT  || 'unknown';
-  const jira  = process.env.JIRA_RESULT || 'unknown';
-  const prs   = process.env.PRS_RESULT  || 'unknown';
+// ── Build summary reply (thread reply) ────────────────────────────────────────
+function buildSummaryReply() {
+  const acm = process.env.ACM_RESULT || 'unknown';
+  const jira = process.env.JIRA_RESULT || 'unknown';
+  const prs = process.env.PRS_RESULT || 'unknown';
   const allOk = acm === 'success' && jira === 'success' && prs === 'success';
+  const threadTs = process.env.THREAD_TS;
+
+  if (!threadTs) {
+    console.warn('Warning: THREAD_TS not provided, message will not be threaded');
+  }
+
+  const release = process.env.NEW_VERSION_LABEL || '';
+  const newBranch = process.env.NEW_RELEASE_BRANCH || '';
+  const newTag = process.env.NEW_PRERELEASE_TAG || '';
+  const prevTag = process.env.PREV_LATEST_TAG || '';
+  const prevBranch = process.env.PREV_RELEASE_BRANCH || '';
+  const ticketCount = process.env.TICKET_COUNT || '0';
+  const filterUrl = process.env.FILTER_URL || '';
+  const releaseTicket = process.env.JIRA_RELEASE_TICKET || '';
+  const duration = process.env.WORKFLOW_DURATION || 'N/A';
+  const runUrl = process.env.RUN_URL || '';
+  const actor = process.env.GITHUB_ACTOR || 'unknown';
+  const runNumber = process.env.RUN_NUMBER || '?';
 
   const untagged = (process.env.UNTAGGED_TICKETS || '')
     .split(',')
@@ -135,47 +284,177 @@ function buildSummary() {
     .filter(Boolean);
 
   const untaggedText = untagged.length > 0
-    ? `${untagged.length} ticket(s) found with code merged but no fix version: ${untagged.join(', ')}`
+    ? untagged.join(', ')
     : 'None';
 
-  const fields = [
-    field('New release branch',   `\`${process.env.NEW_RELEASE_BRANCH}\``,  true),
-    field('Pre-release tag',      `\`${process.env.NEW_PRERELEASE_TAG}\``,   true),
-    field('Previous latest tag',  `\`${process.env.PREV_LATEST_TAG}\` created on \`${process.env.PREV_RELEASE_BRANCH}\``),
-    field('Tickets confirmed',    `${process.env.TICKET_COUNT || 0} tickets tagged to fix version`),
-    field('Jira filter',          process.env.FILTER_URL),
-    field('Release ticket',       `${process.env.JIRA_RELEASE_TICKET} - description updated`),
-    field('Stage pipeline',       acm === 'success' ? 'Triggered in Adobe Cloud Manager successfully' : `ACM step result: ${acm}`),
-    field('Untagged tickets',     untaggedText),
-    field('Workflow run',         process.env.RUN_URL),
-  ];
+  if (allOk) {
+    return {
+      thread_ts: threadTs,
+      text: `✅ Release Cut Completed Successfully`,
+      blocks: [
+        {
+          type: 'header',
+          text: {
+            type: 'plain_text',
+            text: '✅ Release Cut Completed Successfully',
+            emoji: true
+          }
+        },
+        {
+          type: 'section',
+          fields: [
+            {
+              type: 'mrkdwn',
+              text: `*Release:*\n${release}`
+            },
+            {
+              type: 'mrkdwn',
+              text: `*Duration:*\n${duration}`
+            }
+          ]
+        },
+        {
+          type: 'divider'
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*📦 Release Details:*\n• New branch: \`${newBranch}\`\n• Pre-release tag: \`${newTag}\`\n• Previous latest tag: \`${prevTag}\` (on \`${prevBranch}\`)`
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*📊 Jira Updates:*\n• Tickets confirmed: ${ticketCount} tickets tagged to fix version\n• Untagged tickets: ${untaggedText}\n• <${filterUrl}|View Filter>\n• Release ticket: ${releaseTicket} - description updated`
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*☁️ Adobe Cloud Manager:*\n• Stage pipeline triggered successfully`
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*💬 PR Notifications:*\n• All open PRs targeting \`develop\` have been notified`
+          }
+        },
+        {
+          type: 'context',
+          elements: [
+            {
+              type: 'mrkdwn',
+              text: `Triggered by @${actor} • Run #${runNumber} • <${runUrl}|View Workflow>`
+            }
+          ]
+        }
+      ]
+    };
+  } else {
+    // Build failure details
+    const failedSteps = [];
+    if (acm !== 'success') failedSteps.push(`• ❌ Adobe Cloud Manager pipeline (${acm})`);
+    if (jira !== 'success') failedSteps.push(`• ❌ Jira updates (${jira})`);
+    if (prs !== 'success') failedSteps.push(`• ❌ PR notifications (${prs})`);
 
-  return {
-    text: `*ADCMS Release Cut - ${process.env.NEW_VERSION_LABEL}* ${allOk ? '(Completed Successfully)' : '(Completed with Warnings)'}`,
-    attachments: [{
-      color:  allOk ? 'good' : 'danger',
-      fields,
-      footer: `Triggered by ${process.env.GITHUB_ACTOR} - Run #${process.env.RUN_NUMBER || '?'}`,
-    }],
-  };
+    return {
+      thread_ts: threadTs,
+      text: `❌ Release Cut Failed`,
+      blocks: [
+        {
+          type: 'header',
+          text: {
+            type: 'plain_text',
+            text: '❌ Release Cut Failed',
+            emoji: true
+          }
+        },
+        {
+          type: 'section',
+          fields: [
+            {
+              type: 'mrkdwn',
+              text: `*Release:*\n${release}`
+            },
+            {
+              type: 'mrkdwn',
+              text: `*Duration:*\n${duration}`
+            }
+          ]
+        },
+        {
+          type: 'divider'
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*⚠️ Failed Steps:*\n${failedSteps.join('\n')}`
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*🔧 Next Steps:*\n1. Check the workflow logs for detailed error messages\n2. Resolve any issues manually\n3. Re-run failed jobs if needed`
+          }
+        },
+        {
+          type: 'context',
+          elements: [
+            {
+              type: 'mrkdwn',
+              text: `Triggered by @${actor} • Run #${runNumber} • <${runUrl}|View Logs>`
+            }
+          ]
+        }
+      ]
+    };
+  }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   let payload;
+  let messageType;
 
   switch (TYPE) {
-    case 'conflict': payload = buildConflict(); break;
-    case 'clean_pr': payload = buildCleanPR();  break;
-    case 'summary':  payload = buildSummary();  break;
+    case 'start':
+      payload = buildStartMessage();
+      messageType = 'start (main thread)';
+      break;
+    case 'backmerge':
+      payload = buildBackmergeReply();
+      messageType = 'back-merge (thread reply)';
+      break;
+    case 'summary':
+      payload = buildSummaryReply();
+      messageType = 'summary (thread reply)';
+      break;
     default:
-      console.error(`Unknown NOTIFICATION_TYPE: "${TYPE}". Must be conflict | clean_pr | summary`);
+      console.error(`Unknown NOTIFICATION_TYPE: "${TYPE}". Must be start | backmerge | summary`);
       process.exit(1);
   }
 
-  console.log(`[Slack] Sending "${TYPE}" notification`);
-  await postToSlack(payload);
+  console.log(`[Slack] Sending "${messageType}" notification`);
+  const response = await postToSlack(payload);
   console.log(`[Slack] Notification sent successfully`);
+
+  // For start message, save the thread timestamp for later replies
+  if (TYPE === 'start' && response.ts) {
+    const outputFile = process.env.GITHUB_OUTPUT;
+    if (outputFile) {
+      fs.appendFileSync(outputFile, `slack_thread_ts=${response.ts}\n`);
+      console.log(`[Slack] Thread timestamp saved: ${response.ts}`);
+    }
+  }
 }
 
 main().catch(err => { console.error(`[Slack] Error: ${err.message}`); process.exit(1); });
+
+// Made with Bob

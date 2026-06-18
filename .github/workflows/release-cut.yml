@@ -68,12 +68,39 @@ env:
 
 
 # ============================================================
-# JOB 1 — Back-merge previous release branch → develop (always via PR)
+# JOB 0 — Start Slack thread
 # ============================================================
 jobs:
-  back_merge:
+  slack_start:
+    name: "0 · Slack — Start release cut thread"
+    runs-on: ubuntu-latest
+    outputs:
+      thread_ts: ${{ steps.notify.outputs.slack_thread_ts }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Post start message to Slack
+        id: notify
+        run: node scripts/slack.js
+        env:
+          SLACK_WEBHOOK_URL:  ${{ vars.SLACK_WEBHOOK_URL }}
+          NOTIFICATION_TYPE:  start
+          NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
+          GITHUB_ACTOR:       ${{ github.actor }}
+          RUN_NUMBER:         ${{ github.run_number }}
+          RUN_URL:            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+
+# ============================================================
+# JOB 1 — Back-merge previous release branch → develop (always via PR)
+# ============================================================
     name: "1 · Back-merge ${{ inputs.prev_release_branch }} → develop (PR)"
     runs-on: ubuntu-latest
+    needs: slack_start
     outputs:
       had_conflict: ${{ steps.merge.outputs.had_conflict }}
       conflict_files: ${{ steps.merge.outputs.conflict_files }}
@@ -556,10 +583,10 @@ jobs:
           JIRA_BASE_URL:          ${{ vars.JIRA_BASE_URL }}
           JIRA_USER_EMAIL:        ${{ vars.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN:         ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY:       ${{ vars.JIRA_PROJECT_KEY }}
           JIRA_RELEASE_TICKET:    ${{ inputs.jira_release_ticket }}
           FILTER_URL:             ${{ steps.create_filter.outputs.filter_url }}
           NEW_VERSION_LABEL:      ${{ env.NEW_VERSION_LABEL }}
-          CONFIRMED_TICKETS:      ${{ steps.classify.outputs.confirmed_tickets }}
           UNTAGGED_OPEN_TICKETS:  ${{ steps.classify.outputs.untagged_open_tickets }}
           DRY_RUN:                ${{ env.DRY_RUN }}
 
@@ -599,9 +626,9 @@ jobs:
 # JOB 7 — Final Slack summary
 # ============================================================
   notify_slack_final:
-    name: "7 · Slack — release cut summary"
+    name: "7 · Slack — release cut summary (threaded)"
     runs-on: ubuntu-latest
-    needs: [adobe_cloud_manager, jira_release, notify_open_prs]
+    needs: [slack_start, adobe_cloud_manager, jira_release, notify_open_prs]
     if: always()
 
     steps:
@@ -610,19 +637,23 @@ jobs:
         with:
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Determine overall workflow status
-        id: status
+      - name: Calculate workflow duration
+        id: duration
         run: |
-          ACM="${{ needs.adobe_cloud_manager.result }}"
-          JIRA="${{ needs.jira_release.result }}"
-          PRS="${{ needs.notify_open_prs.result }}"
-          if [ "$ACM" = "success" ] && [ "$JIRA" = "success" ] && [ "$PRS" = "success" ]; then
-            echo "overall=success" >> "$GITHUB_OUTPUT"
+          START_TIME="${{ github.event.repository.pushed_at }}"
+          END_TIME=$(date -u +%s)
+          # Fallback if start time not available
+          if [ -z "$START_TIME" ]; then
+            echo "workflow_duration=N/A" >> "$GITHUB_OUTPUT"
           else
-            echo "overall=failure" >> "$GITHUB_OUTPUT"
+            START_EPOCH=$(date -d "$START_TIME" +%s 2>/dev/null || echo "0")
+            DURATION=$((END_TIME - START_EPOCH))
+            MINUTES=$((DURATION / 60))
+            SECONDS=$((DURATION % 60))
+            echo "workflow_duration=${MINUTES}m ${SECONDS}s" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Send release cut summary to Slack
+      - name: Send release cut summary to Slack (threaded)
         run: node scripts/slack.js
         env:
           SLACK_WEBHOOK_URL:    ${{ vars.SLACK_WEBHOOK_URL }}
@@ -642,3 +673,5 @@ jobs:
           GITHUB_ACTOR:         ${{ github.actor }}
           RUN_NUMBER:           ${{ github.run_number }}
           RUN_URL:              ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW_DURATION:    ${{ steps.duration.outputs.workflow_duration }}
+          THREAD_TS:            ${{ needs.slack_start.outputs.thread_ts }}

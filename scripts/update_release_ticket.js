@@ -21,11 +21,11 @@
  *   JIRA_BASE_URL
  *   JIRA_USER_EMAIL
  *   JIRA_API_TOKEN
+ *   JIRA_PROJECT_KEY       e.g. ADCMS
  *   JIRA_RELEASE_TICKET    e.g. ADCMS-9999
  *   FILTER_URL             Full filter URL from update_jira_filter.js output
  *   NEW_VERSION_LABEL      e.g. "AEM 2.02.0 - Phoenix"
- *   CONFIRMED_TICKETS      Comma-separated e.g. ADCMS-100,ADCMS-101
- *   UNTAGGED_OPEN_TICKETS  Comma-separated e.g. ADCMS-102
+ *   UNTAGGED_OPEN_TICKETS  Comma-separated e.g. ADCMS-102 (from git commits)
  *   DRY_RUN
  */
 
@@ -35,10 +35,10 @@ const url   = require('url');
 const JIRA_BASE     = process.env.JIRA_BASE_URL.replace(/\/$/, '');
 const EMAIL         = process.env.JIRA_USER_EMAIL;
 const TOKEN         = process.env.JIRA_API_TOKEN;
+const PROJECT_KEY   = process.env.JIRA_PROJECT_KEY;
 const RELEASE_KEY   = process.env.JIRA_RELEASE_TICKET;
 const FILTER_URL    = process.env.FILTER_URL || `${JIRA_BASE}/issues/?filter=unknown`;
 const NEW_LABEL     = process.env.NEW_VERSION_LABEL;
-const CONFIRMED     = (process.env.CONFIRMED_TICKETS || '').split(',').map(t => t.trim()).filter(Boolean);
 const UNTAGGED_OPEN = (process.env.UNTAGGED_OPEN_TICKETS || '').split(',').map(t => t.trim()).filter(Boolean);
 const DRY_RUN       = process.env.DRY_RUN === 'true';
 
@@ -79,6 +79,50 @@ function request(method, path, body) {
   });
 }
 
+// ── Fetch all tickets from Jira with the new fix version ─────────────────────
+async function fetchAllReleaseTickets() {
+  const jql = (
+    `project = ${PROJECT_KEY} AND ` +
+    `(issuetype = Story OR issuetype = Bug OR issuetype = Spike OR ` +
+    `issuetype = Improvement OR issuetype = Task) AND ` +
+    `fixVersion = "${NEW_LABEL}" ORDER BY key ASC`
+  );
+
+  console.log(`\n[Release Ticket] Fetching all tickets from Jira with fix version "${NEW_LABEL}"`);
+  console.log(`  JQL: ${jql}`);
+
+  const allTickets = [];
+  let startAt = 0;
+  const maxResults = 100;
+
+  while (true) {
+    const response = await request(
+      'GET',
+      `search?jql=${encodeURIComponent(jql)}&startAt=${startAt}&maxResults=${maxResults}&fields=key`
+    );
+
+    const tickets = response.issues.map(issue => issue.key);
+    allTickets.push(...tickets);
+
+    console.log(`  Fetched ${tickets.length} tickets (total so far: ${allTickets.length})`);
+
+    if (response.total <= startAt + maxResults) {
+      break;
+    }
+    startAt += maxResults;
+  }
+
+  // Filter out the release ticket itself
+  const filtered = allTickets.filter(id => id !== RELEASE_KEY);
+  
+  if (filtered.length !== allTickets.length) {
+    console.log(`  Excluded release ticket ${RELEASE_KEY} from the list`);
+  }
+
+  console.log(`\n[Release Ticket] Found ${filtered.length} tickets in Jira with fix version "${NEW_LABEL}"`);
+  return filtered;
+}
+
 // ── Build ADF (Atlassian Document Format) description ─────────────────────────
 // Matches the format in your screenshot exactly:
 //   Release Filter: <link>
@@ -86,7 +130,7 @@ function request(method, path, body) {
 //   Release Tickets:
 //   <link per ticket>
 //   ...
-function buildDescription() {
+function buildDescription(releaseTickets) {
   const filterURL  = FILTER_URL;
 
   // Helper: plain text paragraph
@@ -119,7 +163,7 @@ function buildDescription() {
   // Each ticket on its own paragraph (matching the screenshot layout)
   const ticketHeaderLine = para(text('Release Tickets:'));
 
-  const ticketLines = CONFIRMED.map(id => {
+  const ticketLines = releaseTickets.map(id => {
     const ticketURL = `${JIRA_BASE}/browse/${id}`;
     return para(link(ticketURL, ticketURL));
   });
@@ -162,10 +206,14 @@ function buildDescription() {
 async function main() {
   console.log(`\n[Release Ticket] Updating ${RELEASE_KEY}`);
   console.log(`  Fix version:   ${NEW_LABEL}`);
-  console.log(`  Confirmed:     ${CONFIRMED.length} tickets`);
-  console.log(`  Untagged open: ${UNTAGGED_OPEN.length} tickets`);
 
-  const description = buildDescription();
+  // Fetch all tickets from Jira with the new fix version
+  const releaseTickets = await fetchAllReleaseTickets();
+  
+  console.log(`  Release tickets: ${releaseTickets.length} tickets`);
+  console.log(`  Untagged open:   ${UNTAGGED_OPEN.length} tickets (from git commits)`);
+
+  const description = buildDescription(releaseTickets);
 
   if (DRY_RUN) {
     console.log('\n[DRY RUN] Description that would be written:');
@@ -194,10 +242,10 @@ async function main() {
       content: [{
         type: 'text',
         text: `Release Cut Bot updated this ticket for ${NEW_LABEL}. `
-            + `${CONFIRMED.length} tickets confirmed from tag comparison. `
+            + `${releaseTickets.length} tickets found in Jira with fix version "${NEW_LABEL}". `
             + (UNTAGGED_OPEN.length
-                ? `${UNTAGGED_OPEN.length} ticket(s) found without fix version: ${UNTAGGED_OPEN.join(', ')}.`
-                : 'No untagged open tickets found.'),
+                ? `${UNTAGGED_OPEN.length} ticket(s) found in git commits without fix version: ${UNTAGGED_OPEN.join(', ')}.`
+                : 'No untagged open tickets found in git commits.'),
       }],
     }],
   };
