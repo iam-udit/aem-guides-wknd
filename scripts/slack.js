@@ -145,7 +145,7 @@ function buildBackmergeReply() {
   const threadTs = process.env.THREAD_TS;
 
   if (!threadTs) {
-    console.warn('Warning: THREAD_TS not provided, message will not be threaded');
+    console.log('[Slack] THREAD_TS not provided, posting as standalone message');
   }
 
   if (hadConflict) {
@@ -156,8 +156,7 @@ function buildBackmergeReply() {
       .map(f => `• \`${f}\``)
       .join('\n');
 
-    return {
-      thread_ts: threadTs,
+    const payload = {
       text: `⚠️ Back-merge Conflicts Detected`,
       blocks: [
         {
@@ -206,9 +205,15 @@ function buildBackmergeReply() {
         }
       ]
     };
+    
+    // Only add thread_ts if it's available
+    if (threadTs) {
+      payload.thread_ts = threadTs;
+    }
+    
+    return payload;
   } else {
-    return {
-      thread_ts: threadTs,
+    const payload = {
       text: `✅ Back-merge Completed (No Conflicts)`,
       blocks: [
         {
@@ -250,6 +255,13 @@ function buildBackmergeReply() {
         }
       ]
     };
+    
+    // Only add thread_ts if it's available
+    if (threadTs) {
+      payload.thread_ts = threadTs;
+    }
+    
+    return payload;
   }
 }
 
@@ -262,7 +274,7 @@ function buildSummaryReply() {
   const threadTs = process.env.THREAD_TS;
 
   if (!threadTs) {
-    console.warn('Warning: THREAD_TS not provided, message will not be threaded');
+    console.log('[Slack] THREAD_TS not provided, posting as standalone message');
   }
 
   const release = process.env.NEW_VERSION_LABEL || '';
@@ -288,8 +300,7 @@ function buildSummaryReply() {
     : 'None';
 
   if (allOk) {
-    return {
-      thread_ts: threadTs,
+    const payload = {
       text: `✅ Release Cut Completed Successfully`,
       blocks: [
         {
@@ -355,6 +366,13 @@ function buildSummaryReply() {
         }
       ]
     };
+    
+    // Only add thread_ts if it's available
+    if (threadTs) {
+      payload.thread_ts = threadTs;
+    }
+    
+    return payload;
   } else {
     // Build failure details
     const failedSteps = [];
@@ -362,8 +380,7 @@ function buildSummaryReply() {
     if (jira !== 'success') failedSteps.push(`• ❌ Jira updates (${jira})`);
     if (prs !== 'success') failedSteps.push(`• ❌ PR notifications (${prs})`);
 
-    return {
-      thread_ts: threadTs,
+    const payload = {
       text: `❌ Release Cut Failed`,
       blocks: [
         {
@@ -415,6 +432,13 @@ function buildSummaryReply() {
         }
       ]
     };
+    
+    // Only add thread_ts if it's available
+    if (threadTs) {
+      payload.thread_ts = threadTs;
+    }
+    
+    return payload;
   }
 }
 
