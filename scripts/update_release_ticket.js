@@ -101,15 +101,38 @@ async function fetchAllReleaseTickets() {
       `search/jql?jql=${encodeURIComponent(jql)}&startAt=${startAt}&maxResults=${maxResults}&fields=key`
     );
 
+    // Check if response has the expected structure
+    if (!response.issues || !Array.isArray(response.issues)) {
+      console.error('  Unexpected response structure:', JSON.stringify(response, null, 2));
+      throw new Error('Jira API returned unexpected response structure');
+    }
+
     const tickets = response.issues.map(issue => issue.key);
-    allTickets.push(...tickets);
-
-    console.log(`  Fetched ${tickets.length} tickets (total so far: ${allTickets.length})`);
-
-    // Break if we've fetched all tickets or if this batch was empty
-    if (tickets.length === 0 || allTickets.length >= response.total) {
+    const batchSize = tickets.length;
+    
+    console.log(`  Fetched ${batchSize} tickets (startAt: ${startAt}, total available: ${response.total || 'unknown'})`);
+    
+    // Break if this batch is empty
+    if (batchSize === 0) {
+      console.log(`  No more tickets to fetch`);
       break;
     }
+    
+    allTickets.push(...tickets);
+    console.log(`  Total collected so far: ${allTickets.length}`);
+
+    // Break if we've fetched all available tickets
+    if (response.total && allTickets.length >= response.total) {
+      console.log(`  Reached total count (${response.total}), stopping`);
+      break;
+    }
+    
+    // Break if we got fewer tickets than requested (last page)
+    if (batchSize < maxResults) {
+      console.log(`  Last page (got ${batchSize} < ${maxResults}), stopping`);
+      break;
+    }
+    
     startAt += maxResults;
   }
 
