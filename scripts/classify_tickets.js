@@ -32,6 +32,7 @@ const url    = require('url');
 const JIRA_BASE      = process.env.JIRA_BASE_URL.replace(/\/$/, '');
 const EMAIL          = process.env.JIRA_USER_EMAIL;
 const TOKEN          = process.env.JIRA_API_TOKEN;
+const RELEASE_TICKET = process.env.JIRA_RELEASE_TICKET;  // e.g. ADCMS-9999
 const RAW            = (process.env.RAW_TICKETS || '').split(',').map(t => t.trim()).filter(Boolean);
 const NEW_LABEL      = process.env.NEW_VERSION_LABEL;   // "AEM 2.02.0 - Phoenix"
 const PREV_LABEL     = process.env.PREV_VERSION_LABEL;  // "AEM 2.01.0 - Kraken"
@@ -132,7 +133,12 @@ async function main() {
 
   console.log(`\nClassifying ${RAW.length} tickets against Jira API\n`);
   console.log(`  Current fix version:  "${NEW_LABEL}"`);
-  console.log(`  Previous fix version: "${PREV_LABEL}"\n`);
+  console.log(`  Previous fix version: "${PREV_LABEL}"`);
+  if (RELEASE_TICKET) {
+    console.log(`  Release ticket:       "${RELEASE_TICKET}" (will be excluded from results)\n`);
+  } else {
+    console.log();
+  }
 
   const results = [];
   // Process sequentially to avoid hammering Jira API
@@ -145,17 +151,30 @@ async function main() {
   const ignoredPrev  = results.filter(r => r.rule === 'IGNORE_PREV_FIX').map(r => r.id);
   const ignoredClosed= results.filter(r => r.rule === 'IGNORE_CLOSED').map(r => r.id);
 
+  // Filter out the release ticket itself from all lists
+  const filterReleaseTicket = (tickets) => {
+    if (!RELEASE_TICKET) return tickets;
+    return tickets.filter(id => id !== RELEASE_TICKET);
+  };
+
+  const confirmedFiltered    = filterReleaseTicket(confirmed);
+  const untaggedOpenFiltered = filterReleaseTicket(untaggedOpen);
+
+  if (RELEASE_TICKET && (confirmed.length !== confirmedFiltered.length || untaggedOpen.length !== untaggedOpenFiltered.length)) {
+    console.log(`\n⚠️  Release ticket ${RELEASE_TICKET} was found in commits and excluded from results`);
+  }
+
   console.log(`\n========================================`);
-  console.log(`Confirmed (Rule 3):        ${confirmed.length} tickets - ${confirmed.join(', ') || 'none'}`);
-  console.log(`Untagged and open (Rule 4): ${untaggedOpen.length} tickets - ${untaggedOpen.join(', ') || 'none'}`);
+  console.log(`Confirmed (Rule 3):        ${confirmedFiltered.length} tickets - ${confirmedFiltered.join(', ') || 'none'}`);
+  console.log(`Untagged and open (Rule 4): ${untaggedOpenFiltered.length} tickets - ${untaggedOpenFiltered.join(', ') || 'none'}`);
   console.log(`Ignored (previous fix):     ${ignoredPrev.length} tickets - ${ignoredPrev.join(', ') || 'none'}`);
   console.log(`Ignored (closed, no fix):   ${ignoredClosed.length} tickets - ${ignoredClosed.join(', ') || 'none'}`);
   console.log(`========================================\n`);
 
   fs.appendFileSync(GH_OUTPUT, [
-    `confirmed_tickets=${confirmed.join(',')}`,
-    `untagged_open_tickets=${untaggedOpen.join(',')}`,
-    `ticket_count=${confirmed.length}`,
+    `confirmed_tickets=${confirmedFiltered.join(',')}`,
+    `untagged_open_tickets=${untaggedOpenFiltered.join(',')}`,
+    `ticket_count=${confirmedFiltered.length}`,
     '',
   ].join('\n'));
 }
