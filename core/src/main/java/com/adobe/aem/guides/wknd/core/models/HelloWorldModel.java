@@ -59,7 +59,7 @@ public class HelloWorldModel {
     }
 
     /**
-     * Test changes for the jira ticket: ADCMS-3 - AEM Sites - Page Authoring - Page Properties - Page Properties Tab - Page Properties Panel - Add Property - Property Name - resourceType - Property Type - String - Property Value - wknd/components/helloworld
+     * Test changes for the jira ticket: ADCMS-3
      */
     public String getMessage() {
         return message;
