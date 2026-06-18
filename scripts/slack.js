@@ -6,14 +6,14 @@
  * Using Node.js instead of curl inline JSON avoids all shell
  * escaping and special character issues entirely.
  *
- * Env vars always required:
+ * Environment variables always required:
  *   SLACK_WEBHOOK_URL
- *   NOTIFICATION_TYPE   one of:
- *                         conflict      — back-merge conflict detected
- *                         clean_pr      — back-merge clean, PR raised
- *                         summary       — final release cut summary
+ *   NOTIFICATION_TYPE   One of:
+ *                         conflict  - back-merge conflict detected
+ *                         clean_pr  - back-merge clean, PR raised
+ *                         summary   - final release cut summary
  *
- * Additional env vars per type:
+ * Additional environment variables per type:
  *
  *   conflict:
  *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, GITHUB_ACTOR,
@@ -91,16 +91,16 @@ function buildConflict() {
     : 'Unknown — check the PR for details';
 
   return {
-    text: '⚠️ *Release Cut — Merge Conflict Action Required*',
+    text: '*Release Cut - Merge Conflict Action Required*',
     attachments: [{
       color: 'warning',
       fields: [
         field('Release',           process.env.NEW_VERSION_LABEL,    true),
         field('Triggered by',      process.env.GITHUB_ACTOR,         true),
-        field('Back-merge',        `\`${process.env.PREV_RELEASE_BRANCH}\` → \`develop\``),
+        field('Back-merge',        `\`${process.env.PREV_RELEASE_BRANCH}\` to \`develop\``),
         field('Conflicting files', filesText),
-        field('PR to resolve',     process.env.PR_URL),
-        field('Next step',         'Resolve the conflicts, merge the PR into `develop`. The workflow will automatically continue once the PR is merged.'),
+        field('Pull request',      process.env.PR_URL),
+        field('Next step',         'Resolve the conflicts, merge the pull request into develop. The workflow will automatically continue once the pull request is merged.'),
       ],
       footer: `Run #${process.env.RUN_NUMBER || '?'}`,
     }],
@@ -109,14 +109,14 @@ function buildConflict() {
 
 function buildCleanPR() {
   return {
-    text: '✅ *Release Cut — Back-merge PR raised (no conflicts)*',
+    text: '*Release Cut - Back-merge Pull Request Raised (No Conflicts)*',
     attachments: [{
       color: 'good',
       fields: [
-        field('Release',     process.env.NEW_VERSION_LABEL, true),
-        field('Triggered by',process.env.GITHUB_ACTOR,      true),
-        field('PR raised',   process.env.PR_URL),
-        field('Action',      'Review and merge the PR into `develop`. The workflow will automatically continue once the PR is merged.'),
+        field('Release',        process.env.NEW_VERSION_LABEL, true),
+        field('Triggered by',   process.env.GITHUB_ACTOR,      true),
+        field('Pull request',   process.env.PR_URL),
+        field('Action required', 'Review and merge the pull request into develop. The workflow will automatically continue once the pull request is merged.'),
       ],
       footer: `Run #${process.env.RUN_NUMBER || '?'}`,
     }],
@@ -136,7 +136,7 @@ function buildSummary() {
 
   const untaggedText = untagged.length > 0
     ? `${untagged.length} ticket(s) found with code merged but no fix version: ${untagged.join(', ')}`
-    : 'None ✅';
+    : 'None';
 
   const fields = [
     field('New release branch',   `\`${process.env.NEW_RELEASE_BRANCH}\``,  true),
@@ -144,18 +144,18 @@ function buildSummary() {
     field('Previous latest tag',  `\`${process.env.PREV_LATEST_TAG}\` created on \`${process.env.PREV_RELEASE_BRANCH}\``),
     field('Tickets confirmed',    `${process.env.TICKET_COUNT || 0} tickets tagged to fix version`),
     field('Jira filter',          process.env.FILTER_URL),
-    field('Release ticket',       `${process.env.JIRA_RELEASE_TICKET} — description updated`),
-    field('Stage pipeline',       acm === 'success' ? 'Triggered in Adobe Cloud Manager ✅' : `⚠️ ACM step result: ${acm}`),
+    field('Release ticket',       `${process.env.JIRA_RELEASE_TICKET} - description updated`),
+    field('Stage pipeline',       acm === 'success' ? 'Triggered in Adobe Cloud Manager successfully' : `ACM step result: ${acm}`),
     field('Untagged tickets',     untaggedText),
     field('Workflow run',         process.env.RUN_URL),
   ];
 
   return {
-    text: `${allOk ? '✅' : '⚠️'} *ADCMS Release Cut — ${process.env.NEW_VERSION_LABEL}*`,
+    text: `*ADCMS Release Cut - ${process.env.NEW_VERSION_LABEL}* ${allOk ? '(Completed Successfully)' : '(Completed with Warnings)'}`,
     attachments: [{
       color:  allOk ? 'good' : 'danger',
       fields,
-      footer: `Triggered by ${process.env.GITHUB_ACTOR} · Run #${process.env.RUN_NUMBER || '?'}`,
+      footer: `Triggered by ${process.env.GITHUB_ACTOR} - Run #${process.env.RUN_NUMBER || '?'}`,
     }],
   };
 }
@@ -173,9 +173,9 @@ async function main() {
       process.exit(1);
   }
 
-  console.log(`[Slack] Sending "${TYPE}" notification...`);
+  console.log(`[Slack] Sending "${TYPE}" notification`);
   await postToSlack(payload);
-  console.log(`[Slack] ✅ Notification sent`);
+  console.log(`[Slack] Notification sent successfully`);
 }
 
-main().catch(err => { console.error(`[Slack] ❌ ${err.message}`); process.exit(1); });
+main().catch(err => { console.error(`[Slack] Error: ${err.message}`); process.exit(1); });

@@ -14,18 +14,18 @@
  *
  * Also appends a separate section for Rule 4 tickets (untagged but open):
  *
- *   ⚠️ Tickets found in release branch but NOT tagged to fix version:
- *   https://jsw.ibm.com/browse/ADCMS-XXXX   ← code merged, fix version missing
+ *   Tickets found in release branch but NOT tagged to fix version:
+ *   https://jsw.ibm.com/browse/ADCMS-XXXX (code merged, fix version missing)
  *
- * Env vars:
+ * Environment variables:
  *   JIRA_BASE_URL
  *   JIRA_USER_EMAIL
  *   JIRA_API_TOKEN
  *   JIRA_RELEASE_TICKET    e.g. ADCMS-9999
  *   FILTER_URL             Full filter URL from update_jira_filter.js output
  *   NEW_VERSION_LABEL      e.g. "AEM 2.02.0 - Phoenix"
- *   CONFIRMED_TICKETS      comma-separated  e.g. ADCMS-100,ADCMS-101
- *   UNTAGGED_OPEN_TICKETS  comma-separated  e.g. ADCMS-102
+ *   CONFIRMED_TICKETS      Comma-separated e.g. ADCMS-100,ADCMS-101
+ *   UNTAGGED_OPEN_TICKETS  Comma-separated e.g. ADCMS-102
  *   DRY_RUN
  */
 
@@ -128,9 +128,9 @@ function buildDescription() {
   const untaggedSection = [];
   if (UNTAGGED_OPEN.length > 0) {
     untaggedSection.push(para(
-      text('⚠️ Tickets found in release branch but NOT tagged to fix version '),
+      text('Tickets found in release branch but NOT tagged to fix version '),
       text(`"${NEW_LABEL}"`, [{ type: 'strong' }]),
-      text(' — code is merged but fix version is missing. Please review:'),
+      text(' - code is merged but fix version is missing. Please review:'),
     ));
     UNTAGGED_OPEN.forEach(id => {
       const ticketURL = `${JIRA_BASE}/browse/${id}`;
@@ -160,9 +160,9 @@ function buildDescription() {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`\n[Release Ticket] Updating ${RELEASE_KEY}...`);
-  console.log(`  Fix version  : ${NEW_LABEL}`);
-  console.log(`  Confirmed    : ${CONFIRMED.length} tickets`);
+  console.log(`\n[Release Ticket] Updating ${RELEASE_KEY}`);
+  console.log(`  Fix version:   ${NEW_LABEL}`);
+  console.log(`  Confirmed:     ${CONFIRMED.length} tickets`);
   console.log(`  Untagged open: ${UNTAGGED_OPEN.length} tickets`);
 
   const description = buildDescription();
@@ -173,19 +173,19 @@ async function main() {
     return;
   }
 
-  // Fetch current issue to preserve any existing content we shouldn't overwrite
+  // Fetch current issue to preserve any existing content we should not overwrite
   const issue = await request('GET', `issue/${RELEASE_KEY}?fields=description,summary`);
-  console.log(`  Ticket title : ${issue.fields.summary}`);
+  console.log(`  Ticket title:  ${issue.fields.summary}`);
 
   // PUT updated description
   await request('PUT', `issue/${RELEASE_KEY}`, {
     fields: { description },
   });
 
-  console.log(`\n✅ Release ticket ${RELEASE_KEY} description updated`);
-  console.log(`   ${JIRA_BASE}/browse/${RELEASE_KEY}`);
+  console.log(`\nRelease ticket ${RELEASE_KEY} description updated successfully`);
+  console.log(`  URL: ${JIRA_BASE}/browse/${RELEASE_KEY}`);
 
-  // ── Also post a comment summarising what the bot did ──────────────────────
+  // Also post a comment summarizing what the bot did
   const commentBody = {
     type:    'doc',
     version: 1,
@@ -193,17 +193,17 @@ async function main() {
       type:    'paragraph',
       content: [{
         type: 'text',
-        text: `🤖 Release Cut Bot updated this ticket for ${NEW_LABEL}. `
+        text: `Release Cut Bot updated this ticket for ${NEW_LABEL}. `
             + `${CONFIRMED.length} tickets confirmed from tag comparison. `
             + (UNTAGGED_OPEN.length
-                ? `⚠️ ${UNTAGGED_OPEN.length} ticket(s) found without fix version: ${UNTAGGED_OPEN.join(', ')}.`
+                ? `${UNTAGGED_OPEN.length} ticket(s) found without fix version: ${UNTAGGED_OPEN.join(', ')}.`
                 : 'No untagged open tickets found.'),
       }],
     }],
   };
 
   await request('POST', `issue/${RELEASE_KEY}/comment`, { body: commentBody });
-  console.log(`✅ Comment posted on ${RELEASE_KEY}`);
+  console.log(`Comment posted on ${RELEASE_KEY}`);
 }
 
 main().catch(err => { console.error(err.message); process.exit(1); });

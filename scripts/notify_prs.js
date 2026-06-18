@@ -5,7 +5,7 @@
  * Finds all open PRs targeting `develop` and posts a comment
  * asking devs to retarget or clean up fix versions.
  *
- * Env vars:
+ * Environment variables:
  *   GH_TOKEN
  *   GITHUB_SERVER_URL    e.g. https://github.ibm.com
  *   GITHUB_REPOSITORY    e.g. IBM/adcms
@@ -90,18 +90,18 @@ async function getAllOpenPRs() {
 // ── Comment body ──────────────────────────────────────────────────────────────
 function buildComment(author) {
   const runURL = `${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}`;
-  return `👋 Hi @${author} — automated notice from the **ADCMS Release Cut bot**.
+  return `Hi @${author} - Automated notice from the ADCMS Release Cut bot.
 
 ---
 
 **Release \`${NEW_LABEL}\` has been cut.** Branch \`${NEW_BRANCH}\` now exists as the new release branch.
 
-Please check the following for this PR:
+Please check the following for this pull request:
 
 | # | Your situation | Action needed |
 |---|---|---|
-| 1 | PR contains changes **intended for \`${NEW_LABEL}\`** | Retarget from \`develop\` → \`${NEW_BRANCH}\` |
-| 2 | PR is **not intended for this release** | No action — will ship in a future release |
+| 1 | PR contains changes **intended for \`${NEW_LABEL}\`** | Retarget from \`develop\` to \`${NEW_BRANCH}\` |
+| 2 | PR is **not intended for this release** | No action - will ship in a future release |
 | 3 | Jira ticket has **fix version \`${NEW_LABEL}\`** but PR targets \`develop\` | Either retarget to \`${NEW_BRANCH}\` OR remove the fix version from Jira |
 | 4 | Your files were involved in a **back-merge conflict** | Cross-verify your changes are intact on \`develop\` after conflict resolution |
 
@@ -113,13 +113,13 @@ _Auto-posted by [Release Cut workflow run #${RUN_NUMBER}](${runURL})_`;
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`\n[PR Notify] Fetching open PRs targeting \`develop\` in ${REPO}...`);
+  console.log(`\n[PR Notify] Fetching open pull requests targeting develop in ${REPO}`);
 
   const prs = await getAllOpenPRs();
-  console.log(`[PR Notify] Found ${prs.length} open PRs\n`);
+  console.log(`[PR Notify] Found ${prs.length} open pull requests\n`);
 
   if (!prs.length) {
-    console.log('[PR Notify] Nothing to do.');
+    console.log('[PR Notify] No open pull requests found');
     return;
   }
 
@@ -131,14 +131,14 @@ async function main() {
       await ghRequest('POST', `/repos/${REPO}/issues/${number}/comments`, {
         body: buildComment(author),
       });
-      console.log(`  ✅ PR #${number} — "${title}" (@${author})`);
+      console.log(`  PR #${number} - "${title}" (@${author}) - Comment posted`);
       commented++;
     } catch (err) {
-      console.error(`  ❌ PR #${number} — failed: ${err.message}`);
+      console.error(`  PR #${number} - Failed: ${err.message}`);
     }
   }
 
-  console.log(`\n[PR Notify] Done — commented on ${commented}/${prs.length} PRs`);
+  console.log(`\n[PR Notify] Completed - Commented on ${commented}/${prs.length} pull requests`);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });

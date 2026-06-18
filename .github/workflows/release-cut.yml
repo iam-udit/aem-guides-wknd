@@ -1,11 +1,11 @@
 # ============================================================
-# Release Cut Workflow — ADCMS Team  (v2)
+# Release Cut Workflow - ADCMS Team (v2)
 # ============================================================
-# Trigger : Manual (workflow_dispatch) from GitHub Actions UI
+# Trigger: Manual (workflow_dispatch) from GitHub Actions UI
 #
 # Secrets required (Repo → Settings → Secrets and variables → Actions):
 #
-#   GH_TOKEN              GitHub PAT  (repo + workflow scopes)
+#   GH_TOKEN              GitHub PAT (repo + workflow scopes)
 #   JIRA_BASE_URL         https://jsw.ibm.com
 #   JIRA_USER_EMAIL       Your IBM Jira login email
 #   JIRA_API_TOKEN        Jira API token
@@ -18,7 +18,7 @@
 #   SLACK_WEBHOOK_URL     Incoming webhook for your release channel
 # ============================================================
 
-name: Release Cut
+name: Release Cut - ${{ inputs.new_version_label }}
 
 on:
   workflow_dispatch:
@@ -559,12 +559,12 @@ jobs:
     if: always()
 
     steps:
-      - name: Checkout (needed for slack.js)
+      - name: Checkout repository for Slack notification script
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Determine overall status
+      - name: Determine overall workflow status
         id: status
         run: |
           ACM="${{ needs.adobe_cloud_manager.result }}"
@@ -576,7 +576,7 @@ jobs:
             echo "overall=failure" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Post summary to Slack
+      - name: Send release cut summary to Slack
         run: node scripts/slack.js
         env:
           SLACK_WEBHOOK_URL:    ${{ vars.SLACK_WEBHOOK_URL }}

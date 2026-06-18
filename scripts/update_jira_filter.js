@@ -12,7 +12,7 @@
  * The new filter URL is written to GITHUB_OUTPUT as `filter_url`
  * so downstream steps (release ticket, Slack) can reference it.
  *
- * Env vars:
+ * Environment variables:
  *   JIRA_BASE_URL
  *   JIRA_USER_EMAIL
  *   JIRA_API_TOKEN
@@ -85,18 +85,18 @@ async function main() {
   const jql        = buildJQL();
   const filterName = `${PROJECT} Release ${NEW_LABEL}`;
 
-  console.log(`\n[Jira Filter] Creating new filter...`);
-  console.log(`  Name : "${filterName}"`);
-  console.log(`  JQL  : ${jql}`);
+  console.log(`\n[Jira Filter] Creating new filter`);
+  console.log(`  Name: "${filterName}"`);
+  console.log(`  JQL:  ${jql}`);
 
   if (DRY_RUN) {
-    console.log('\n[DRY RUN] Would POST new filter — skipping.');
+    console.log('\n[DRY RUN] Would create new filter - skipping');
     if (GH_OUTPUT) fs.appendFileSync(GH_OUTPUT, `filter_url=${JIRA_BASE}/issues/?filter=DRY_RUN\nfilter_id=0\n`);
     return;
   }
 
   // Fetch project ID first (required for sharePermissions)
-  console.log(`\n[Jira Filter] Fetching project ID for ${PROJECT}...`);
+  console.log(`\n[Jira Filter] Fetching project ID for ${PROJECT}`);
   const projectData = await request('GET', `project/${PROJECT}`);
   const projectId = projectData.id;
   console.log(`  Project ID: ${projectId}`);
@@ -114,10 +114,10 @@ async function main() {
   const filterId  = result.id;
   const filterURL = `${JIRA_BASE}/issues/?filter=${filterId}`;
 
-  console.log(`\n✅ Filter created`);
-  console.log(`   ID  : ${filterId}`);
-  console.log(`   Name: ${result.name}`);
-  console.log(`   URL : ${filterURL}`);
+  console.log(`\nFilter created successfully`);
+  console.log(`  ID:   ${filterId}`);
+  console.log(`  Name: ${result.name}`);
+  console.log(`  URL:  ${filterURL}`);
 
   // Write to GITHUB_OUTPUT so downstream jobs can use the URL
   if (GH_OUTPUT) {
