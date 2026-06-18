@@ -107,14 +107,14 @@ function buildStartMessage() {
 
   return {
     channel: CHANNEL_ID,
-    text: `🚀 Release Cut Started: ${release}`,
+    text: `Release Cut Started | ${release}`,
     blocks: [
       {
         type: 'header',
         text: {
           type: 'plain_text',
-          text: `🚀 Release Cut Started: ${release}`,
-          emoji: true
+          text: 'Release Cut Started',
+          emoji: false
         }
       },
       {
@@ -122,15 +122,19 @@ function buildStartMessage() {
         fields: [
           {
             type: 'mrkdwn',
-            text: `*Workflow Run:*\n#${runNumber}`
+            text: `*Release*\n${release}`
           },
           {
             type: 'mrkdwn',
-            text: `*Triggered By:*\n@${actor}`
+            text: `*Status*\nIn Progress`
           },
           {
             type: 'mrkdwn',
-            text: `*Status:*\nIn Progress ⏳`
+            text: `*Workflow Run*\n#${runNumber}`
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Triggered By*\n@${actor}`
           }
         ]
       },
@@ -138,7 +142,7 @@ function buildStartMessage() {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*📋 Steps:*\n⏳ Back-merge previous release → develop\n⏸️ Cut new release branch\n⏸️ Rotate tags\n⏸️ Adobe Cloud Manager pipeline\n⏸️ Jira updates\n⏸️ PR notifications\n⏸️ Final summary`
+          text: '*Planned Stages*\n• Back-merge previous release into `develop`\n• Cut next release branch\n• Rotate release tags\n• Update Adobe Cloud Manager pipeline\n• Update Jira artifacts\n• Notify open pull requests\n• Publish final summary'
         }
       },
       {
@@ -148,8 +152,8 @@ function buildStartMessage() {
             type: 'button',
             text: {
               type: 'plain_text',
-              text: '🔗 View Workflow',
-              emoji: true
+              text: 'View Workflow',
+              emoji: false
             },
             url: runUrl
           }
@@ -174,123 +178,121 @@ function buildBackmergeReply() {
     console.log('[Slack] THREAD_TS not provided, posting as standalone message');
   }
 
-  if (hadConflict) {
-    const conflictFiles = (process.env.CONFLICT_FILES || '')
-      .split(',')
-      .map(f => f.trim())
-      .filter(Boolean)
-      .map(f => `• \`${f}\``)
-      .join('\n');
+  const payload = hadConflict
+    ? {
+        channel: CHANNEL_ID,
+        text: 'Back-merge Conflicts Require Action',
+        blocks: [
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: '*Stage*\nBack-merge'
+              },
+              {
+                type: 'mrkdwn',
+                text: '*Status*\nConflicts Require Action'
+              }
+            ]
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Scope*\nPrevious release branch \`${prevBranch}\` is being merged into \`develop\`.`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Conflicting Files*\n${(process.env.CONFLICT_FILES || '')
+                .split(',')
+                .map(f => f.trim())
+                .filter(Boolean)
+                .map(f => `• \`${f}\``)
+                .join('\n') || '• Review the pull request for file-level details.'}`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*Required Action*\n• Check out the back-merge branch\n• Resolve all merge conflicts\n• Commit and push the resolution\n• Merge the pull request into `develop`\n• Workflow execution will continue automatically after merge'
+            }
+          },
+          {
+            type: 'actions',
+            elements: [
+              {
+                type: 'button',
+                text: {
+                  type: 'plain_text',
+                  text: 'Open Pull Request',
+                  emoji: false
+                },
+                url: prUrl,
+                style: 'danger'
+              }
+            ]
+          }
+        ]
+      }
+    : {
+        channel: CHANNEL_ID,
+        text: 'Back-merge PR Ready',
+        blocks: [
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: '*Stage*\nBack-merge'
+              },
+              {
+                type: 'mrkdwn',
+                text: '*Status*\nReady for Review'
+              }
+            ]
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Scope*\nPrevious release branch \`${prevBranch}\` has been merged into the back-merge PR targeting \`develop\`.`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*Required Action*\n• Review the pull request\n• Merge the pull request into `develop`\n• Workflow execution will continue automatically after merge'
+            }
+          },
+          {
+            type: 'actions',
+            elements: [
+              {
+                type: 'button',
+                text: {
+                  type: 'plain_text',
+                  text: 'Open Pull Request',
+                  emoji: false
+                },
+                url: prUrl,
+                style: 'primary'
+              }
+            ]
+          }
+        ]
+      };
 
-    const payload = {
-      channel: CHANNEL_ID,
-      text: `⚠️ Back-merge Conflicts Detected`,
-      blocks: [
-        {
-          type: 'header',
-          text: {
-            type: 'plain_text',
-            text: '⚠️ Back-merge Conflicts Detected',
-            emoji: true
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `Back-merge PR created: \`${prevBranch}\` → \`develop\``
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*Conflicting files:*\n${conflictFiles || 'Unknown — check the PR for details'}`
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*Action Required:*\n1. Check out the back-merge branch\n2. Resolve all conflict markers\n3. Commit and push the resolution\n4. Merge the PR into \`develop\`\n5. Workflow will automatically continue once merged`
-          }
-        },
-        {
-          type: 'actions',
-          elements: [
-            {
-              type: 'button',
-              text: {
-                type: 'plain_text',
-                text: '🔗 View PR',
-                emoji: true
-              },
-              url: prUrl,
-              style: 'danger'
-            }
-          ]
-        }
-      ]
-    };
-    
-    // Only add thread_ts if it's available
-    if (threadTs) {
-      payload.thread_ts = threadTs;
-    }
-    
-    return payload;
-  } else {
-    const payload = {
-      channel: CHANNEL_ID,
-      text: `✅ Back-merge Completed (No Conflicts)`,
-      blocks: [
-        {
-          type: 'header',
-          text: {
-            type: 'plain_text',
-            text: '✅ Back-merge Completed (No Conflicts)',
-            emoji: true
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `Back-merge PR created: \`${prevBranch}\` → \`develop\``
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*Action Required:*\n• Review and merge the PR into \`develop\`\n• Workflow will automatically continue once merged`
-          }
-        },
-        {
-          type: 'actions',
-          elements: [
-            {
-              type: 'button',
-              text: {
-                type: 'plain_text',
-                text: '🔗 View PR',
-                emoji: true
-              },
-              url: prUrl,
-              style: 'primary'
-            }
-          ]
-        }
-      ]
-    };
-    
-    // Only add thread_ts if it's available
-    if (threadTs) {
-      payload.thread_ts = threadTs;
-    }
-    
-    return payload;
+  if (threadTs) {
+    payload.thread_ts = threadTs;
   }
+
+  return payload;
 }
 
 /**
@@ -330,152 +332,150 @@ function buildSummaryReply() {
     .filter(Boolean);
 
   const untaggedText = untagged.length > 0
-    ? untagged.join(', ')
-    : 'None';
+    ? untagged.map(ticket => `• ${ticket}`).join('\n')
+    : '• None';
 
-  if (allOk) {
-    const payload = {
-      channel: CHANNEL_ID,
-      text: `✅ Release Cut Completed Successfully`,
-      blocks: [
-        {
-          type: 'header',
-          text: {
-            type: 'plain_text',
-            text: '✅ Release Cut Completed Successfully',
-            emoji: true
-          }
-        },
-        {
-          type: 'section',
-          fields: [
-            {
-              type: 'mrkdwn',
-              text: `*Release:*\n${release}`
-            },
-            {
-              type: 'mrkdwn',
-              text: `*Duration:*\n${duration}`
-            }
-          ]
-        },
-        {
-          type: 'divider'
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*📦 Release Details:*\n• New branch: \`${newBranch}\`\n• Pre-release tag: \`${newTag}\`\n• Previous latest tag: \`${prevTag}\` (on \`${prevBranch}\`)`
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*📊 Jira Updates:*\n• Tickets confirmed: ${ticketCount} tickets tagged to fix version\n• Untagged tickets: ${untaggedText}\n• <${filterUrl}|View Filter>\n• <${releaseTicketUrl}|${releaseTicket}> - description updated`
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*☁️ Adobe Cloud Manager:*\n• Stage pipeline triggered successfully`
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*💬 PR Notifications:*\n• All open PRs targeting \`develop\` have been notified`
-          }
-        },
-        {
-          type: 'context',
-          elements: [
-            {
-              type: 'mrkdwn',
-              text: `Triggered by @${actor} • Run #${runNumber} • <${runUrl}|View Workflow>`
-            }
-          ]
-        }
-      ]
-    };
-    
-    // Only add thread_ts if it's available
-    if (threadTs) {
-      payload.thread_ts = threadTs;
-    }
-    
-    return payload;
-  } else {
-    // Build failure details
-    const failedSteps = [];
-    if (acm !== 'success') failedSteps.push(`• ❌ Adobe Cloud Manager pipeline (${acm})`);
-    if (jira !== 'success') failedSteps.push(`• ❌ Jira updates (${jira})`);
-    if (prs !== 'success') failedSteps.push(`• ❌ PR notifications (${prs})`);
+  const failedSteps = [];
+  if (acm !== 'success') failedSteps.push(`• Adobe Cloud Manager: ${acm}`);
+  if (jira !== 'success') failedSteps.push(`• Jira updates: ${jira}`);
+  if (prs !== 'success') failedSteps.push(`• PR notifications: ${prs}`);
 
-    const payload = {
-      channel: CHANNEL_ID,
-      text: `❌ Release Cut Failed`,
-      blocks: [
-        {
-          type: 'header',
-          text: {
-            type: 'plain_text',
-            text: '❌ Release Cut Failed',
-            emoji: true
-          }
-        },
-        {
-          type: 'section',
-          fields: [
-            {
-              type: 'mrkdwn',
-              text: `*Release:*\n${release}`
-            },
-            {
-              type: 'mrkdwn',
-              text: `*Duration:*\n${duration}`
+  const payload = allOk
+    ? {
+        channel: CHANNEL_ID,
+        text: `Release Cut Completed | ${release}`,
+        blocks: [
+          {
+            type: 'header',
+            text: {
+              type: 'plain_text',
+              text: 'Release Cut Completed',
+              emoji: false
             }
-          ]
-        },
-        {
-          type: 'divider'
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*⚠️ Failed Steps:*\n${failedSteps.join('\n')}`
-          }
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*🔧 Next Steps:*\n1. Check the workflow logs for detailed error messages\n2. Resolve any issues manually\n3. Re-run failed jobs if needed`
-          }
-        },
-        {
-          type: 'context',
-          elements: [
-            {
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: `*Release*\n${release}`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Status*\nCompleted`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Duration*\n${duration}`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Workflow Run*\n#${runNumber}`
+              }
+            ]
+          },
+          {
+            type: 'divider'
+          },
+          {
+            type: 'section',
+            text: {
               type: 'mrkdwn',
-              text: `Triggered by @${actor} • Run #${runNumber} • <${runUrl}|View Logs>`
+              text: `*Release Artifacts*\n• New release branch: \`${newBranch}\`\n• New pre-release tag: \`${newTag}\`\n• Previous latest tag: \`${prevTag}\` on \`${prevBranch}\``
             }
-          ]
-        }
-      ]
-    };
-    
-    // Only add thread_ts if it's available
-    if (threadTs) {
-      payload.thread_ts = threadTs;
-    }
-    
-    return payload;
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Jira Outcome*\n• Confirmed tickets: ${ticketCount}\n• Untagged tickets requiring review:\n${untaggedText}\n• Filter: <${filterUrl}|Open filter>\n• Release ticket: <${releaseTicketUrl}|${releaseTicket}>`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*Execution Outcome*\n• Adobe Cloud Manager pipeline updated and triggered\n• Jira artifacts updated\n• Open pull requests notified'
+            }
+          },
+          {
+            type: 'context',
+            elements: [
+              {
+                type: 'mrkdwn',
+                text: `Triggered by @${actor} • <${runUrl}|View workflow>`
+              }
+            ]
+          }
+        ]
+      }
+    : {
+        channel: CHANNEL_ID,
+        text: `Release Cut Completed with Exceptions | ${release}`,
+        blocks: [
+          {
+            type: 'header',
+            text: {
+              type: 'plain_text',
+              text: 'Release Cut Completed with Exceptions',
+              emoji: false
+            }
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: `*Release*\n${release}`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Status*\nExceptions Detected`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Duration*\n${duration}`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Workflow Run*\n#${runNumber}`
+              }
+            ]
+          },
+          {
+            type: 'divider'
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Exceptions*\n${failedSteps.join('\n') || '• Review workflow logs for details.'}`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*Required Follow-up*\n• Review workflow logs\n• Complete any failed operational steps manually if required\n• Re-run affected jobs or the workflow after remediation'
+            }
+          },
+          {
+            type: 'context',
+            elements: [
+              {
+                type: 'mrkdwn',
+                text: `Triggered by @${actor} • <${runUrl}|View workflow logs>`
+              }
+            ]
+          }
+        ]
+      };
+
+  if (threadTs) {
+    payload.thread_ts = threadTs;
   }
+
+  return payload;
 }
 
 /**
@@ -519,10 +519,6 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error(`[Slack] Fatal error: ${err.message}`);
-  process.exit(1);
-});
 main().catch(err => {
   console.error(`[Slack] Fatal error: ${err.message}`);
   process.exit(1);

@@ -83,24 +83,23 @@ jobs:
 
           BRANCH_PATTERN='^release-([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z0-9._-]+)$'
 
-          if [[ ! "$PREV_BRANCH" =~ $BRANCH_PATTERN ]]; then
+          if [[ "$PREV_BRANCH" =~ $BRANCH_PATTERN ]]; then
+            PREV_VERSION="${BASH_REMATCH[1]}"
+            PREV_CODENAME_RAW="${BASH_REMATCH[2]}"
+          else
             echo "::error::Invalid previous release branch format: $PREV_BRANCH"
             echo "::error::Expected format: release-x.y.z-codename"
             exit 1
           fi
 
-          if [[ ! "$NEXT_BRANCH" =~ $BRANCH_PATTERN ]]; then
+          if [[ "$NEXT_BRANCH" =~ $BRANCH_PATTERN ]]; then
+            NEW_VERSION="${BASH_REMATCH[1]}"
+            NEW_CODENAME_RAW="${BASH_REMATCH[2]}"
+          else
             echo "::error::Invalid next release branch format: $NEXT_BRANCH"
             echo "::error::Expected format: release-x.y.z-codename"
             exit 1
           fi
-
-          PREV_VERSION="${BASH_REMATCH[1]}"
-          PREV_CODENAME_RAW="${BASH_REMATCH[2]}"
-
-          [[ "$NEXT_BRANCH" =~ $BRANCH_PATTERN ]]
-          NEW_VERSION="${BASH_REMATCH[1]}"
-          NEW_CODENAME_RAW="${BASH_REMATCH[2]}"
 
           PREV_CODENAME_TITLE=$(echo "$PREV_CODENAME_RAW" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
           NEW_CODENAME_TITLE=$(echo "$NEW_CODENAME_RAW" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
