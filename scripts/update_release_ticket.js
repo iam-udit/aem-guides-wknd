@@ -106,7 +106,8 @@ async function fetchAllReleaseTickets() {
 
     console.log(`  Fetched ${tickets.length} tickets (total so far: ${allTickets.length})`);
 
-    if (response.total <= startAt + maxResults) {
+    // Break if we've fetched all tickets or if this batch was empty
+    if (tickets.length === 0 || allTickets.length >= response.total) {
       break;
     }
     startAt += maxResults;
