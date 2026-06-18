@@ -107,14 +107,14 @@ function buildStartMessage() {
 
   return {
     channel: CHANNEL_ID,
-    text: `Release Cut Started | ${release}`,
+    text: `:rocket: Release Cut Started: ${release}`,
     blocks: [
       {
         type: 'header',
         text: {
           type: 'plain_text',
-          text: 'Release Cut Started',
-          emoji: false
+          text: `:rocket: Release Cut Started: ${release}`,
+          emoji: true
         }
       },
       {
@@ -181,8 +181,16 @@ function buildBackmergeReply() {
   const payload = hadConflict
     ? {
         channel: CHANNEL_ID,
-        text: 'Back-merge Conflicts Require Action',
+        text: ':warning: Back-merge Requires Action (Conflicts)',
         blocks: [
+          {
+            type: 'header',
+            text: {
+              type: 'plain_text',
+              text: ':warning: Back-merge Requires Action (Conflicts)',
+              emoji: true
+            }
+          },
           {
             type: 'section',
             fields: [
@@ -241,8 +249,16 @@ function buildBackmergeReply() {
       }
     : {
         channel: CHANNEL_ID,
-        text: 'Back-merge PR Ready',
+        text: ':white_check_mark: Back-merge Completed (No Conflicts)',
         blocks: [
+          {
+            type: 'header',
+            text: {
+              type: 'plain_text',
+              text: ':white_check_mark: Back-merge Completed (No Conflicts)',
+              emoji: true
+            }
+          },
           {
             type: 'section',
             fields: [
@@ -343,14 +359,14 @@ function buildSummaryReply() {
   const payload = allOk
     ? {
         channel: CHANNEL_ID,
-        text: `Release Cut Completed | ${release}`,
+        text: `:white_check_mark: Release Cut Completed: ${release}`,
         blocks: [
           {
             type: 'header',
             text: {
               type: 'plain_text',
-              text: 'Release Cut Completed',
-              emoji: false
+              text: `:white_check_mark: Release Cut Completed: ${release}`,
+              emoji: true
             }
           },
           {
@@ -411,14 +427,14 @@ function buildSummaryReply() {
       }
     : {
         channel: CHANNEL_ID,
-        text: `Release Cut Completed with Exceptions | ${release}`,
+        text: `:warning: Release Cut Completed with Exceptions: ${release}`,
         blocks: [
           {
             type: 'header',
             text: {
               type: 'plain_text',
-              text: 'Release Cut Completed with Exceptions',
-              emoji: false
+              text: `:warning: Release Cut Completed with Exceptions: ${release}`,
+              emoji: true
             }
           },
           {

@@ -449,7 +449,7 @@ jobs:
   rotate_tags:
     name: "3 · Rotate tags"
     runs-on: ubuntu-latest
-    needs: cut_release_branch
+    needs: [derive_release_metadata, cut_release_branch]
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
