@@ -227,29 +227,19 @@ jobs:
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
           echo "PR created: $PR_URL"
 
-      - name: Notify Slack — conflict needs resolution
-        if: steps.merge.outputs.had_conflict == 'true' && env.DRY_RUN == 'false'
+      - name: Notify Slack — back-merge status (threaded)
+        if: env.DRY_RUN == 'false'
         run: node scripts/slack.js
         env:
-          SLACK_WEBHOOK_URL:  ${{ vars.SLACK_WEBHOOK_URL }}
-          NOTIFICATION_TYPE:  conflict
-          NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
-          PREV_RELEASE_BRANCH: ${{ env.PREV_RELEASE_BRANCH }}
-          GITHUB_ACTOR:       ${{ github.actor }}
-          CONFLICT_FILES:     ${{ steps.merge.outputs.conflict_files }}
-          PR_URL:             ${{ steps.create_pr.outputs.pr_url }}
-          RUN_NUMBER:         ${{ github.run_number }}
-
-      - name: Notify Slack — clean PR raised
-        if: steps.merge.outputs.had_conflict == 'false' && env.DRY_RUN == 'false'
-        run: node scripts/slack.js
-        env:
-          SLACK_WEBHOOK_URL:  ${{ vars.SLACK_WEBHOOK_URL }}
-          NOTIFICATION_TYPE:  clean_pr
-          NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
-          GITHUB_ACTOR:       ${{ github.actor }}
-          PR_URL:             ${{ steps.create_pr.outputs.pr_url }}
-          RUN_NUMBER:         ${{ github.run_number }}
+          SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID:     ${{ vars.SLACK_CHANNEL_ID }}
+          NOTIFICATION_TYPE:    backmerge
+          NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
+          PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
+          PR_URL:               ${{ steps.create_pr.outputs.pr_url }}
+          HAD_CONFLICT:         ${{ steps.merge.outputs.had_conflict }}
+          CONFLICT_FILES:       ${{ steps.merge.outputs.conflict_files }}
+          THREAD_TS:            ${{ needs.slack_start.outputs.thread_ts }}
 
       - name: Summarise result for approval gate
         run: |
