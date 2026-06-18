@@ -18,7 +18,7 @@
 #   SLACK_WEBHOOK_URL     Incoming webhook for your release channel
 # ============================================================
 
-name: Release Cut - ${{ inputs.new_version_label }}
+name: IBM CMS Release Cut
 
 on:
   workflow_dispatch:
@@ -359,24 +359,38 @@ jobs:
       - name: Create latest tag for previous release (${{ env.PREV_LATEST_TAG }})
         run: |
           TAG="${{ env.PREV_LATEST_TAG }}"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}" && exit 0
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "[DRY RUN] Would create latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}"
+            exit 0
+          fi
+          
+          # Extract codename from previous release branch (e.g., release-2.02.0-loki -> Loki)
+          PREV_CODENAME=$(echo "${{ inputs.prev_release_branch }}" | sed -E 's/.*-([^-]+)$/\1/' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+          
           gh release create "$TAG" \
             --target "${{ env.PREV_RELEASE_BRANCH }}" \
-            --title  "Release ${{ env.PREV_VERSION }}" \
-            --notes  "Stable release — ${{ env.PREV_VERSION }}" \
+            --title  "Release ${{ env.PREV_VERSION }} ${PREV_CODENAME}" \
+            --notes  "Stable release - ${{ env.PREV_VERSION }} ${PREV_CODENAME}" \
             --latest
-          echo "✅ Created latest tag: $TAG → ${{ env.PREV_RELEASE_BRANCH }}"
+          echo "Created latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}"
 
       - name: Create pre-release tag for new release (${{ env.NEW_PRERELEASE_TAG }})
         run: |
           TAG="${{ env.NEW_PRERELEASE_TAG }}"
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}" && exit 0
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "[DRY RUN] Would create pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}"
+            exit 0
+          fi
+          
+          # Capitalize first letter of codename (e.g., minotaur -> Minotaur)
+          NEW_CODENAME=$(echo "${{ inputs.new_codename }}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+          
           gh release create "$TAG" \
             --target "${{ env.NEW_RELEASE_BRANCH }}" \
-            --title  "Pre-release ${{ env.NEW_VERSION }}" \
-            --notes  "Pre-release — ${{ env.NEW_VERSION_LABEL }}" \
+            --title  "Release ${{ env.NEW_VERSION }} ${NEW_CODENAME}" \
+            --notes  "Pre-release - ${{ env.NEW_VERSION }} ${NEW_CODENAME}" \
             --prerelease
-          echo "✅ Created pre-release tag: $TAG → ${{ env.NEW_RELEASE_BRANCH }}"
+          echo "Created pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}"
 
 
 # ============================================================
