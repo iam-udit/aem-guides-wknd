@@ -249,41 +249,28 @@ function buildBackmergeReply() {
       }
     : {
         channel: CHANNEL_ID,
-        text: ':white_check_mark: Back-merge Completed (No Conflicts)',
+        text: ':white_check_mark: Back-merge PR Raised (No Conflicts)',
         blocks: [
           {
             type: 'header',
             text: {
               type: 'plain_text',
-              text: ':white_check_mark: Back-merge Completed (No Conflicts)',
+              text: ':white_check_mark: Back-merge PR Raised (No Conflicts)',
               emoji: true
             }
           },
           {
             type: 'section',
-            fields: [
-              {
-                type: 'mrkdwn',
-                text: '*Stage*\nBack-merge'
-              },
-              {
-                type: 'mrkdwn',
-                text: '*Status*\nReady for Review'
-              }
-            ]
-          },
-          {
-            type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Scope*\nPrevious release branch \`${prevBranch}\` has been merged into the back-merge PR targeting \`develop\`.`
+              text: `Back-merge PR created: \`${prevBranch}\` → \`develop\``
             }
           },
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Required Action*\n• Review the pull request\n• Merge the pull request into `develop`\n• Workflow execution will continue automatically after merge'
+              text: '*Action Required:*\n• Review and merge the PR into `develop`\n• Workflow will automatically continue once merged'
             }
           },
           {
@@ -348,8 +335,8 @@ function buildSummaryReply() {
     .filter(Boolean);
 
   const untaggedText = untagged.length > 0
-    ? untagged.map(ticket => `• ${ticket}`).join('\n')
-    : '• None';
+    ? `\n${untagged.map(ticket => `• ${ticket}`).join('\n')}`
+    : ' None';
 
   const failedSteps = [];
   if (acm !== 'success') failedSteps.push(`• Adobe Cloud Manager: ${acm}`);
