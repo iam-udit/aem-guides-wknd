@@ -77,15 +77,20 @@ Required tools on the runner (all standard on Linux):
 
 | Field | Example |
 |-------|---------|
-| Previous release branch | `release/2.01.0` |
-| New release version | `2.02.0` |
-| New Jira fix-version label | `AEM 2.02.0 - Phoenix` |
-| Previous Jira fix-version label | `AEM 2.01.0 - Kraken` |
+| Previous release branch | `release-2.02.0-loki` |
+| Next release branch | `release-2.03.0-minotaur` |
+| New Jira fix-version label | `AEM 2.03.0 - Minotaur` |
 | Jira release ticket key | `ADCMS-9999` |
 | Dry run | `false` |
 
 5. Click the green **Run workflow** button
 6. Watch progress in the Actions tab - each job shows status in real-time
+
+The workflow derives these values automatically from the branch names:
+- Previous release version → from `Previous release branch`
+- Next release version → from `Next release branch`
+- Next release codename → from `Next release branch`
+- Previous release codename → from `Previous release branch`
 
 ---
 

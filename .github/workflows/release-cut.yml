@@ -28,16 +28,8 @@ on:
         description: "Previous release branch  (e.g. release-2.02.0-loki)"
         required: true
         type: string
-      prev_version:
-        description: "Previous release version number  (e.g. 2.02.0)"
-        required: true
-        type: string
-      new_version:
-        description: "New release version number  (e.g. 2.03.0)"
-        required: true
-        type: string
-      new_codename:
-        description: "New release codename  (e.g. minotaur)"
+      next_release_branch:
+        description: "Next release branch  (e.g. release-2.03.0-minotaur)"
         required: true
         type: string
       new_version_label:
@@ -55,16 +47,17 @@ on:
         type: boolean
 
 env:
-  # Branch naming: release-2.03.0-minotaur
-  NEW_RELEASE_BRANCH:  "release-${{ inputs.new_version }}-${{ inputs.new_codename }}"
   PREV_RELEASE_BRANCH: "${{ inputs.prev_release_branch }}"
-  NEW_VERSION:         "${{ inputs.new_version }}"
-  PREV_VERSION:        "${{ inputs.prev_version }}"
+  NEW_RELEASE_BRANCH:  "${{ inputs.next_release_branch }}"
+  PREV_VERSION:        "${{ regexReplace(inputs.prev_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}"
+  NEW_VERSION:         "${{ regexReplace(inputs.next_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}"
+  PREV_CODENAME:       "${{ regexReplace(inputs.prev_release_branch, '^release-[0-9]+\\.[0-9]+\\.[0-9]+-(.+)$', '$1') }}"
+  NEW_CODENAME:        "${{ regexReplace(inputs.next_release_branch, '^release-[0-9]+\\.[0-9]+\\.[0-9]+-(.+)$', '$1') }}"
   NEW_VERSION_LABEL:   "${{ inputs.new_version_label }}"
   # Tag naming: 2.03.0-beta  (pre-release) and 2.02.0 (latest for prev)
-  NEW_PRERELEASE_TAG:  "${{ inputs.new_version }}-beta"
-  PREV_LATEST_TAG:     "${{ inputs.prev_version }}"
-  PREV_PRERELEASE_TAG: "${{ inputs.prev_version }}-beta"
+  NEW_PRERELEASE_TAG:  "${{ regexReplace(inputs.next_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}-beta"
+  PREV_LATEST_TAG:     "${{ regexReplace(inputs.prev_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}"
+  PREV_PRERELEASE_TAG: "${{ regexReplace(inputs.prev_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}-beta"
   DRY_RUN:             "${{ inputs.dry_run }}"
 
 
@@ -346,7 +339,7 @@ jobs:
 # JOB 2 — Cut new release branch from develop
 # ============================================================
   cut_release_branch:
-    name: "2 · Cut release-${{ inputs.new_version }}-${{ inputs.new_codename }} from develop"
+    name: "2 · Cut ${{ env.NEW_RELEASE_BRANCH }} from develop"
     runs-on: ubuntu-latest
     needs: await_pr_merge
 
@@ -382,7 +375,7 @@ jobs:
 #   CREATE  2.03.0-beta          (pre-release tag for new branch)
 # ============================================================
   rotate_tags:
-    name: "3 · Rotate tags — delete ${{ inputs.prev_version }}-beta, create ${{ inputs.prev_version }} + ${{ inputs.new_version }}-beta"
+    name: "3 · Rotate tags — delete ${{ env.PREV_PRERELEASE_TAG }}, create ${{ env.PREV_LATEST_TAG }} + ${{ env.NEW_PRERELEASE_TAG }}"
     runs-on: ubuntu-latest
     needs: cut_release_branch
     env:
@@ -412,7 +405,7 @@ jobs:
           fi
           
           # Extract codename from previous release branch (e.g., release-2.02.0-loki -> Loki)
-          PREV_CODENAME=$(echo "${{ inputs.prev_release_branch }}" | sed -E 's/.*-([^-]+)$/\1/' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+          PREV_CODENAME=$(echo "${{ env.PREV_CODENAME }}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
           
           gh release create "$TAG" \
             --target "${{ env.PREV_RELEASE_BRANCH }}" \
@@ -430,7 +423,7 @@ jobs:
           fi
           
           # Capitalize first letter of codename (e.g., minotaur -> Minotaur)
-          NEW_CODENAME=$(echo "${{ inputs.new_codename }}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+          NEW_CODENAME=$(echo "${{ env.NEW_CODENAME }}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
           
           gh release create "$TAG" \
             --target "${{ env.NEW_RELEASE_BRANCH }}" \
