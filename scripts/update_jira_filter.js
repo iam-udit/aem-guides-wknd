@@ -83,7 +83,7 @@ function buildJQL() {
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   const jql        = buildJQL();
-  const filterName = `${PROJECT} Release ${NEW_LABEL}`;
+  const filterName = NEW_LABEL;
 
   console.log(`\n[Jira Filter] Creating new filter`);
   console.log(`  Name: "${filterName}"`);
