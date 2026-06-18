@@ -49,15 +49,7 @@ on:
 env:
   PREV_RELEASE_BRANCH: "${{ inputs.prev_release_branch }}"
   NEW_RELEASE_BRANCH:  "${{ inputs.next_release_branch }}"
-  PREV_VERSION:        "${{ regexReplace(inputs.prev_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}"
-  NEW_VERSION:         "${{ regexReplace(inputs.next_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}"
-  PREV_CODENAME:       "${{ regexReplace(inputs.prev_release_branch, '^release-[0-9]+\\.[0-9]+\\.[0-9]+-(.+)$', '$1') }}"
-  NEW_CODENAME:        "${{ regexReplace(inputs.next_release_branch, '^release-[0-9]+\\.[0-9]+\\.[0-9]+-(.+)$', '$1') }}"
   NEW_VERSION_LABEL:   "${{ inputs.new_version_label }}"
-  # Tag naming: 2.03.0-beta  (pre-release) and 2.02.0 (latest for prev)
-  NEW_PRERELEASE_TAG:  "${{ regexReplace(inputs.next_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}-beta"
-  PREV_LATEST_TAG:     "${{ regexReplace(inputs.prev_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}"
-  PREV_PRERELEASE_TAG: "${{ regexReplace(inputs.prev_release_branch, '^release-([0-9]+\\.[0-9]+\\.[0-9]+)-.*$', '$1') }}-beta"
   DRY_RUN:             "${{ inputs.dry_run }}"
 
 
@@ -339,7 +331,7 @@ jobs:
 # JOB 2 — Cut new release branch from develop
 # ============================================================
   cut_release_branch:
-    name: "2 · Cut ${{ env.NEW_RELEASE_BRANCH }} from develop"
+    name: "2 · Cut next release branch from develop"
     runs-on: ubuntu-latest
     needs: await_pr_merge
 
@@ -375,7 +367,7 @@ jobs:
 #   CREATE  2.03.0-beta          (pre-release tag for new branch)
 # ============================================================
   rotate_tags:
-    name: "3 · Rotate tags — delete ${{ env.PREV_PRERELEASE_TAG }}, create ${{ env.PREV_LATEST_TAG }} + ${{ env.NEW_PRERELEASE_TAG }}"
+    name: "3 · Rotate tags"
     runs-on: ubuntu-latest
     needs: cut_release_branch
     env:
@@ -388,47 +380,48 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Delete previous pre-release tag (${{ env.PREV_PRERELEASE_TAG }})
+      - name: Delete previous pre-release tag
         run: |
-          TAG="${{ env.PREV_PRERELEASE_TAG }}"
+          PREV_VERSION=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')
+          TAG="${PREV_VERSION}-beta"
           [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would delete tag: $TAG" && exit 0
           gh release delete "$TAG" --yes 2>/dev/null || true
-          git push origin ":refs/tags/$TAG"      2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
           echo "✅ Deleted pre-release tag: $TAG"
 
-      - name: Create latest tag for previous release (${{ env.PREV_LATEST_TAG }})
+      - name: Create latest tag for previous release
         run: |
-          TAG="${{ env.PREV_LATEST_TAG }}"
+          PREV_VERSION=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')
+          PREV_CODENAME=$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed -E 's/^release-[0-9]+\.[0-9]+\.[0-9]+-(.*)$/\1/' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+          TAG="${PREV_VERSION}"
+
           if [ "$DRY_RUN" = "true" ]; then
             echo "[DRY RUN] Would create latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}"
             exit 0
           fi
-          
-          # Extract codename from previous release branch (e.g., release-2.02.0-loki -> Loki)
-          PREV_CODENAME=$(echo "${{ env.PREV_CODENAME }}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-          
+
           gh release create "$TAG" \
             --target "${{ env.PREV_RELEASE_BRANCH }}" \
-            --title  "Release ${{ env.PREV_VERSION }} ${PREV_CODENAME}" \
-            --notes  "Stable release - ${{ env.PREV_VERSION }} ${PREV_CODENAME}" \
+            --title  "Release ${PREV_VERSION} ${PREV_CODENAME}" \
+            --notes  "Stable release - ${PREV_VERSION} ${PREV_CODENAME}" \
             --latest
           echo "Created latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}"
 
-      - name: Create pre-release tag for new release (${{ env.NEW_PRERELEASE_TAG }})
+      - name: Create pre-release tag for new release
         run: |
-          TAG="${{ env.NEW_PRERELEASE_TAG }}"
+          NEW_VERSION=$(echo "${{ env.NEW_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')
+          NEW_CODENAME=$(echo "${{ env.NEW_RELEASE_BRANCH }}" | sed -E 's/^release-[0-9]+\.[0-9]+\.[0-9]+-(.*)$/\1/' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+          TAG="${NEW_VERSION}-beta"
+
           if [ "$DRY_RUN" = "true" ]; then
             echo "[DRY RUN] Would create pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}"
             exit 0
           fi
-          
-          # Capitalize first letter of codename (e.g., minotaur -> Minotaur)
-          NEW_CODENAME=$(echo "${{ env.NEW_CODENAME }}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-          
+
           gh release create "$TAG" \
             --target "${{ env.NEW_RELEASE_BRANCH }}" \
-            --title  "Release ${{ env.NEW_VERSION }} ${NEW_CODENAME}" \
-            --notes  "Pre-release - ${{ env.NEW_VERSION }} ${NEW_CODENAME}" \
+            --title  "Release ${NEW_VERSION} ${NEW_CODENAME}" \
+            --notes  "Pre-release - ${NEW_VERSION} ${NEW_CODENAME}" \
             --prerelease
           echo "Created pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}"
 
@@ -522,8 +515,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          PREV_TAG="${{ env.PREV_LATEST_TAG }}"   # e.g. 2.02.0
-          NEW_TAG="${{ env.NEW_PRERELEASE_TAG }}"  # e.g. 2.03.0-beta
+          PREV_TAG="$(echo "${{ env.PREV_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')"   # e.g. 2.02.0
+          NEW_TAG="$(echo "${{ env.NEW_RELEASE_BRANCH }}" | sed -E 's/^release-([0-9]+\.[0-9]+\.[0-9]+)-.*$/\1/')-beta"  # e.g. 2.03.0-beta
 
           echo "Comparing $PREV_TAG → $NEW_TAG"
 
@@ -648,8 +641,8 @@ jobs:
           NOTIFICATION_TYPE:    summary
           NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
           NEW_RELEASE_BRANCH:   ${{ env.NEW_RELEASE_BRANCH }}
-          NEW_PRERELEASE_TAG:   ${{ env.NEW_PRERELEASE_TAG }}
-          PREV_LATEST_TAG:      ${{ env.PREV_LATEST_TAG }}
+          NEW_PRERELEASE_TAG:   ${{ env.NEW_RELEASE_BRANCH }}
+          PREV_LATEST_TAG:      ${{ env.PREV_RELEASE_BRANCH }}
           PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
           TICKET_COUNT:         ${{ needs.jira_release.outputs.ticket_count }}
           FILTER_URL:           ${{ needs.jira_release.outputs.filter_url }}
