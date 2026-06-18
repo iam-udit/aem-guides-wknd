@@ -59,8 +59,7 @@ public class HelloWorldModel {
     }
 
     /**
-     * Test changes for the jira ticket: ADCMS-3
-     * Few more updates for the jira ticket: ADCMS-3
+     * Test changes for the jira ticket: ADCMS-3     * 
      */
     public String getMessage() {
         return message;
