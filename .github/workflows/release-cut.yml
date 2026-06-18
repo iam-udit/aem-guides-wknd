@@ -15,7 +15,8 @@
 #   ACM_ORG_ID            Adobe IMS org ID
 #   ACM_PROGRAM_ID        Cloud Manager program ID
 #   ACM_PIPELINE_ID       Stage pipeline ID
-#   SLACK_WEBHOOK_URL     Incoming webhook for your release channel
+#   SLACK_BOT_TOKEN       Slack Bot User OAuth Token (xoxb-...)
+#   SLACK_CHANNEL_ID      Slack Channel ID (e.g., C01234567)
 # ============================================================
 
 name: IBM CMS Release Cut
@@ -87,7 +88,8 @@ jobs:
         id: notify
         run: node scripts/slack.js
         env:
-          SLACK_WEBHOOK_URL:  ${{ vars.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN:    ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID:   ${{ vars.SLACK_CHANNEL_ID }}
           NOTIFICATION_TYPE:  start
           NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
           GITHUB_ACTOR:       ${{ github.actor }}
@@ -657,7 +659,8 @@ jobs:
       - name: Send release cut summary to Slack (threaded)
         run: node scripts/slack.js
         env:
-          SLACK_WEBHOOK_URL:    ${{ vars.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID:     ${{ vars.SLACK_CHANNEL_ID }}
           NOTIFICATION_TYPE:    summary
           NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
           NEW_RELEASE_BRANCH:   ${{ env.NEW_RELEASE_BRANCH }}

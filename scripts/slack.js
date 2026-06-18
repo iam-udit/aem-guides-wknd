@@ -3,14 +3,15 @@
  * slack.js
  * --------
  * Handles all Slack notifications for the release cut workflow using threaded messages.
- * 
+ *
  * Thread Structure:
  * 1. Main thread message - posted at workflow start
  * 2. Back-merge reply - posted after back-merge completes
  * 3. Final summary reply - posted at workflow end
  *
  * Environment variables:
- *   SLACK_WEBHOOK_URL
+ *   SLACK_BOT_TOKEN     Slack Bot User OAuth Token (xoxb-...)
+ *   SLACK_CHANNEL_ID    Channel ID (e.g., C01234567)
  *   NOTIFICATION_TYPE   One of: start | backmerge | summary
  *   
  *   For 'start':
@@ -32,22 +33,24 @@ const https = require('https');
 const url   = require('url');
 const fs    = require('fs');
 
-const WEBHOOK  = process.env.SLACK_WEBHOOK_URL;
-const TYPE     = process.env.NOTIFICATION_TYPE;
+const BOT_TOKEN  = process.env.SLACK_BOT_TOKEN;
+const CHANNEL_ID = process.env.SLACK_CHANNEL_ID;
+const TYPE       = process.env.NOTIFICATION_TYPE;
 
-if (!WEBHOOK) { console.error('SLACK_WEBHOOK_URL is required'); process.exit(1); }
-if (!TYPE)    { console.error('NOTIFICATION_TYPE is required'); process.exit(1); }
+if (!BOT_TOKEN)  { console.error('SLACK_BOT_TOKEN is required'); process.exit(1); }
+if (!CHANNEL_ID) { console.error('SLACK_CHANNEL_ID is required'); process.exit(1); }
+if (!TYPE)       { console.error('NOTIFICATION_TYPE is required'); process.exit(1); }
 
-// ── HTTP post to Slack webhook ────────────────────────────────────────────────
+// ── HTTP post to Slack API ────────────────────────────────────────────────────
 function postToSlack(payload) {
   return new Promise((resolve, reject) => {
-    const body    = JSON.stringify(payload);
-    const parsed  = url.parse(WEBHOOK);
+    const body = JSON.stringify(payload);
     const options = {
-      hostname: parsed.hostname,
-      path:     parsed.path,
+      hostname: 'slack.com',
+      path:     '/api/chat.postMessage',
       method:   'POST',
       headers: {
+        'Authorization':  `Bearer ${BOT_TOKEN}`,
         'Content-Type':   'application/json',
         'Content-Length': Buffer.byteLength(body),
       },
@@ -57,16 +60,15 @@ function postToSlack(payload) {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`Slack returned HTTP ${res.statusCode}: ${data}`));
-        } else {
-          // Slack returns 'ok' or a JSON with ts (timestamp) for threaded messages
-          try {
-            const response = JSON.parse(data);
+        try {
+          const response = JSON.parse(data);
+          if (!response.ok) {
+            reject(new Error(`Slack API error: ${response.error || 'Unknown error'}`));
+          } else {
             resolve(response);
-          } catch {
-            resolve({ ok: data === 'ok' });
           }
+        } catch (err) {
+          reject(new Error(`Failed to parse Slack response: ${data}`));
         }
       });
     });
@@ -85,6 +87,7 @@ function buildStartMessage() {
   const release = process.env.NEW_VERSION_LABEL || '';
 
   return {
+    channel: CHANNEL_ID,
     text: `🚀 Release Cut Started: ${release}`,
     blocks: [
       {
@@ -157,6 +160,7 @@ function buildBackmergeReply() {
       .join('\n');
 
     const payload = {
+      channel: CHANNEL_ID,
       text: `⚠️ Back-merge Conflicts Detected`,
       blocks: [
         {
@@ -214,6 +218,7 @@ function buildBackmergeReply() {
     return payload;
   } else {
     const payload = {
+      channel: CHANNEL_ID,
       text: `✅ Back-merge Completed (No Conflicts)`,
       blocks: [
         {
@@ -301,6 +306,7 @@ function buildSummaryReply() {
 
   if (allOk) {
     const payload = {
+      channel: CHANNEL_ID,
       text: `✅ Release Cut Completed Successfully`,
       blocks: [
         {
@@ -381,6 +387,7 @@ function buildSummaryReply() {
     if (prs !== 'success') failedSteps.push(`• ❌ PR notifications (${prs})`);
 
     const payload = {
+      channel: CHANNEL_ID,
       text: `❌ Release Cut Failed`,
       blocks: [
         {
