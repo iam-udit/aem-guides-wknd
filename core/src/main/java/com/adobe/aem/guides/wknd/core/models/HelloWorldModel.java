@@ -46,6 +46,9 @@ public class HelloWorldModel {
 
     private String message;
 
+    /**
+     * Changes from the develop to have merge conflict case
+     */
     @PostConstruct
     protected void init() {
         PageManager pageManager = resourceResolver.adaptTo(PageManager.class);
