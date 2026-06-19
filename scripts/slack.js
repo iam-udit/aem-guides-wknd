@@ -436,8 +436,8 @@ function buildSummaryReply() {
 
   // Build ACM status section
   const acmStatusText = acmFailed
-    ? `⚠️ *Adobe Cloud Manager* (Optional)\n• Status: Failed\n• ${acmError || 'Check workflow logs for details'}\n• Action: Update pipeline branch and trigger build manually in Cloud Manager`
-    : `✅ *Adobe Cloud Manager*\n• Pipeline branch updated to \`${newBranch}\`\n• Stage pipeline triggered successfully`;
+    ? `*Adobe Cloud Manager* (Optional)\n• Status: Failed\n• ${acmError || 'Check workflow logs for details'}\n• Action: Update pipeline branch and trigger build manually in Cloud Manager`
+    : `*Adobe Cloud Manager*\n• Pipeline branch updated to \`${newBranch}\`\n• Stage pipeline triggered successfully`;
 
   const payload = coreSuccess
     ? {
@@ -505,7 +505,7 @@ function buildSummaryReply() {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Core Workflow Status*\n✅ Jira artifacts updated\n✅ Open pull requests notified`
+              text: `*Core Workflow Status*\n• Jira artifacts updated\n• Open pull requests notified`
             }
           },
           ...(acmFailed ? [{
@@ -576,7 +576,7 @@ function buildSummaryReply() {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Adobe Cloud Manager* (Optional)\n⚠️ Also failed, but this is not blocking\n${acmError ? `• ${acmError}` : ''}`
+              text: `*Adobe Cloud Manager* (Optional)\n• Also failed, but this is not blocking\n${acmError ? `• ${acmError}` : ''}`
             }
           }] : []),
           {
