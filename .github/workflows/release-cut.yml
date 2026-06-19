@@ -778,7 +778,9 @@ jobs:
     name: "7 · Slack summary"
     runs-on: ubuntu-latest
     needs: [derive_release_metadata, slack_start, adobe_cloud_manager, jira_release, notify_open_prs]
-    if: always()
+    if: |
+      always() &&
+      needs.slack_start.result == 'success'
 
     steps:
       - name: Checkout repository for Slack notification script
