@@ -147,7 +147,7 @@ If the branch format does not match this convention, the workflow fails early in
 | **Step 1c - Wait for PR merge** | **(Conditional)** When a back-merge PR is created, actively polls the pull request status every 30 seconds until it is merged. Workflow automatically continues once pull request is merged into `develop`. Times out after 2 hours if not merged. |
 | **Step 2 - Cut branch** | Creates new release branch from `develop` and pushes to repository |
 | **Step 3 - Rotate tags** | Deletes previous pre-release tag, creates latest tag for previous release, creates pre-release tag for new release |
-| **Step 4 - ACM pipeline** | **(Optional)** Obtains Adobe IMS token, updates stage pipeline branch to new release branch, triggers stage build. Failures are logged as warnings and never block downstream jobs. |
+| **Step 4 - ACM pipeline** | Obtains Adobe IMS token, updates stage pipeline branch to new release branch, triggers stage build |
 | **Step 5 - Jira** | Extracts ticket IDs from git log between tags, applies 4 classification rules via Jira API, creates new filter, updates release ticket description |
 | **Step 6 - PR notify** | Comments on every open pull request targeting `develop` with retargeting instructions |
 | **Step 7 - Slack** | Posts complete release cut summary to release channel |
@@ -200,66 +200,6 @@ After the workflow completes:
 
 ---
 
-## Adobe Cloud Manager Integration (Step 4)
-
-### Overview
-
-The Adobe Cloud Manager (ACM) integration is an **optional step** that updates your Cloud Manager pipeline configuration and triggers a stage build. If ACM operations fail, the workflow continues with remaining steps (Jira updates, PR notifications, Slack summary).
-
-### Key Implementation Details
-
-**Authentication:**
-- Uses Adobe IMS OAuth 2.0 with client credentials flow
-- Requires `ACM_CLIENT_ID` and `ACM_CLIENT_SECRET`
-- Token endpoint: `https://ims-na1.adobelogin.com/ims/token/v3`
-
-**API Requirements:**
-- All Cloud Manager API calls require three headers:
-  - `Authorization: Bearer <token>` - IMS access token
-  - `x-gw-ims-org-id: <org_id>` - Adobe IMS organization ID
-  - `x-api-key: <client_id>` - Same value as `ACM_CLIENT_ID`
-
-**Pipeline Operations:**
-1. **Fetch current pipeline config** - GET request to retrieve existing configuration
-2. **Update pipeline branch** - PATCH request (not PUT) to update BUILD phase branch to new release branch
-3. **Trigger pipeline execution** - PUT request to start stage build
-
-### Error Handling
-
-The workflow handles common ACM scenarios gracefully:
-
-| HTTP Status | Scenario | Workflow Behavior |
-|-------------|----------|-------------------|
-| **200** | Pipeline updated successfully | ✅ Continues to trigger execution |
-| **201** | Pipeline triggered successfully | ✅ Logs success and continues |
-| **403** | Permission denied | ⚠️ Logs warning, suggests checking Deployment Manager role, continues workflow |
-| **409** | Pipeline already running | ⚠️ Logs warning, suggests manual update after current run completes, continues workflow |
-| **Other** | Unexpected error | ⚠️ Logs warning with HTTP code, suggests manual verification, continues workflow |
-
-### Troubleshooting ACM Issues
-
-**Authentication failures:**
-- Verify `ACM_CLIENT_ID` and `ACM_CLIENT_SECRET` are correct
-- Ensure the service account has not been revoked in Adobe Admin Console
-- Check that the OAuth integration includes required scopes
-
-**Pipeline update failures (HTTP 409):**
-- Pipeline is currently executing - wait for completion
-- Update the pipeline branch manually in Cloud Manager UI
-- Re-run the workflow if needed
-
-**Permission errors (HTTP 403):**
-- Service account needs **Deployment Manager** role in Cloud Manager
-- Verify the service account is added to the correct program
-- Check that API access is enabled for the integration
-
-**Pipeline not found errors:**
-- Verify `ACM_PROGRAM_ID` matches your Cloud Manager program
-- Verify `ACM_PIPELINE_ID` matches your stage pipeline
-- Confirm the pipeline exists and is not deleted
-
----
-
 ## Troubleshooting
 
 | Problem | Solution |
@@ -268,10 +208,7 @@ The workflow handles common ACM scenarios gracefully:
 | Runner queued but never starts | Check runner status: Repository → Settings → Actions → Runners |
 | `node` not found on runner | Install Node.js on the runner machine |
 | Back-merge PR polling times out | Merge the PR into `develop`, then re-run the workflow if needed |
-| ACM authentication fails | Verify `ACM_CLIENT_ID` and `ACM_CLIENT_SECRET` are correct and the service account is active |
-| ACM pipeline returns HTTP 409 | Pipeline is already running - wait for completion or update manually in Cloud Manager |
-| ACM pipeline returns HTTP 403 | Service account needs Deployment Manager role in Cloud Manager |
-| ACM pipeline not found | Verify `ACM_PIPELINE_ID` and `ACM_PROGRAM_ID` match your Cloud Manager configuration |
+| ACM pipeline trigger returns non-201 | Verify `ACM_PIPELINE_ID`, `ACM_PROGRAM_ID`, and Adobe credentials |
 | No tickets found from tag compare | Ensure commit messages contain `ADCMS-XXXX` pattern; cherry-picks without ticket references need manual addition |
 | Filter creation fails | Verify Jira project key, Jira permissions, and fix-version existence |
 | Release ticket update fails | Verify the Jira release ticket exists and the bot user can edit/comment on it |
@@ -383,44 +320,16 @@ Step 2 starts (create release branch)
 
 ---
 
-## Slack Notifications
+## Troubleshooting
 
-The workflow uses threaded Slack messages to provide real-time updates throughout the release cut process.
-
-### Message Structure
-
-1. **Start Message (Step 0a)** - Posted when workflow begins
-   - Creates the main thread
-   - Shows release version and planned stages
-   - Provides link to workflow run
-
-2. **Back-merge Status (Step 1)** - Posted as thread reply
-   - Reports clean merge, conflicts, or already-in-sync status
-   - Includes PR link when applicable
-   - Provides action items for conflict resolution
-
-3. **Final Summary (Step 7)** - Posted as thread reply
-   - Comprehensive release cut summary
-   - Shows all completed steps and their results
-   - Includes ticket counts, filter URL, and release artifacts
-
-### ACM Result Handling in Slack Summary
-
-The final Slack summary includes the Adobe Cloud Manager step result with clear status indicators:
-
-| ACM_RESULT | Slack Display | Meaning |
-|------------|---------------|---------|
-| `success` | ✅ Adobe Cloud Manager pipeline updated and triggered | Pipeline branch updated and stage build started successfully |
-| `failure` | ⚠️ Adobe Cloud Manager: failure | ACM step encountered errors (see workflow logs for details) |
-| `cancelled` or `skipped` | ℹ️ Adobe Cloud Manager: skipped | ACM step was not executed (dry run or conditional skip) |
-
-**Important:** ACM failures are treated as warnings only. The workflow continues with Jira updates, PR notifications, and Slack summary even if ACM operations fail. This ensures the release cut process completes and provides visibility into what succeeded and what requires manual follow-up.
-
-### Troubleshooting Slack Notifications
-
-- **No messages appearing:** Verify `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` are correct
-- **Bot not in channel:** Add the Slack bot to the target channel
-- **Thread replies not working:** Ensure the start message completed successfully and `THREAD_TS` is being passed to subsequent steps
-- **Incomplete summaries:** Check workflow logs for script errors in `scripts/slack.js`
-
----
+| Problem | Solution |
+|---------|----------|
+| Workflow fails in metadata derivation | Verify both branch inputs follow `release-x.y.z-codename` |
+| Runner queued but never starts | Check runner status: Repository → Settings → Actions → Runners |
+| `node` not found on runner | Install Node.js on the runner machine |
+| Back-merge PR polling times out | Merge the PR into `develop`, then re-run the workflow if needed |
+| ACM pipeline trigger returns non-201 | Verify `ACM_PIPELINE_ID`, `ACM_PROGRAM_ID`, and Adobe credentials |
+| No tickets found from tag compare | Ensure commit messages contain `ADCMS-XXXX` pattern; cherry-picks without ticket references need manual addition |
+| Filter creation fails | Verify Jira project key, Jira permissions, and fix-version existence |
+| Release ticket update fails | Verify the Jira release ticket exists and the bot user can edit/comment on it |
+| Slack notification not arriving | Verify `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`, and bot membership in the target channel |
