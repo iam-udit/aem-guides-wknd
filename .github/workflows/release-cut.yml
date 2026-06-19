@@ -54,21 +54,21 @@ env:
 
 
 # ============================================================
-# JOB 0 — Start Slack thread
+# JOB 0 — Derive release metadata
 # ============================================================
 jobs:
   derive_release_metadata:
     name: "0 · Derive release metadata"
     runs-on: ubuntu-latest
     outputs:
-      prev_version: ${{ steps.derive.outputs.prev_version }}
-      prev_codename: ${{ steps.derive.outputs.prev_codename }}
-      prev_version_label: ${{ steps.derive.outputs.prev_version_label }}
-      prev_latest_tag: ${{ steps.derive.outputs.prev_latest_tag }}
+      prev_version:        ${{ steps.derive.outputs.prev_version }}
+      prev_codename:       ${{ steps.derive.outputs.prev_codename }}
+      prev_version_label:  ${{ steps.derive.outputs.prev_version_label }}
+      prev_latest_tag:     ${{ steps.derive.outputs.prev_latest_tag }}
       prev_prerelease_tag: ${{ steps.derive.outputs.prev_prerelease_tag }}
-      new_version: ${{ steps.derive.outputs.new_version }}
-      new_codename: ${{ steps.derive.outputs.new_codename }}
-      new_prerelease_tag: ${{ steps.derive.outputs.new_prerelease_tag }}
+      new_version:         ${{ steps.derive.outputs.new_version }}
+      new_codename:        ${{ steps.derive.outputs.new_codename }}
+      new_prerelease_tag:  ${{ steps.derive.outputs.new_prerelease_tag }}
 
     steps:
       - name: Validate branch naming convention and derive metadata
@@ -145,7 +145,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GH_TOKEN }}
 
@@ -171,13 +171,13 @@ jobs:
     needs: [derive_release_metadata, slack_start]
     outputs:
       already_merged: ${{ steps.merge.outputs.already_merged }}
-      had_conflict: ${{ steps.merge.outputs.had_conflict }}
+      had_conflict:   ${{ steps.merge.outputs.had_conflict }}
       conflict_files: ${{ steps.merge.outputs.conflict_files }}
-      pr_url: ${{ steps.create_pr.outputs.pr_url }}
+      pr_url:         ${{ steps.create_pr.outputs.pr_url }}
 
     steps:
       - name: Checkout develop
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           ref: develop
           fetch-depth: 0
@@ -188,54 +188,46 @@ jobs:
           git config user.name  "ADCMS Release Bot"
           git config user.email "adcms-bot@ibm.com"
 
-      - name: Clean up existing back-merge branch and pull request if present
+      - name: Clean up existing back-merge branch and PR if present
         id: cleanup
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           PR_BRANCH="chore/back-merge-${{ inputs.prev_release_branch }}"
-          
-          # Check if branch exists remotely
+
           if git ls-remote --heads origin "$PR_BRANCH" | grep -q "$PR_BRANCH"; then
             echo "Existing branch found: $PR_BRANCH"
-            
-            # Check if there's an open PR for this branch
+
             PR_NUMBER=$(gh pr list --head "$PR_BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
-            
+
             if [ -n "$PR_NUMBER" ]; then
-              echo "Found open pull request #$PR_NUMBER for branch $PR_BRANCH"
-              echo "Closing existing pull request to create fresh one"
-              gh pr close "$PR_NUMBER" --comment "Closing this pull request to create a fresh back-merge. A new pull request will be created automatically." || true
+              echo "Closing existing PR #$PR_NUMBER"
+              gh pr close "$PR_NUMBER" --comment "Closing to create a fresh back-merge PR." || true
             fi
-            
-            # Delete the remote branch
-            echo "Deleting existing remote branch: $PR_BRANCH"
+
             git push origin --delete "$PR_BRANCH" 2>/dev/null || true
           else
-            echo "No existing branch found - proceeding with fresh creation"
+            echo "No existing branch found — proceeding with fresh creation"
           fi
 
       - name: Attempt merge into a PR branch
         id: merge
         run: |
-          # Check if branches are already in sync (manual back-merge already done)
           git fetch origin "${{ env.PREV_RELEASE_BRANCH }}"
-          
-          # Check if there are any differences between develop and previous release branch
+
           DIFF_COUNT=$(git rev-list --count HEAD..origin/${{ env.PREV_RELEASE_BRANCH }} 2>/dev/null || echo "0")
-          
+
           if [ "$DIFF_COUNT" = "0" ]; then
-            echo "already_merged=true" >> "$GITHUB_OUTPUT"
-            echo "had_conflict=false" >> "$GITHUB_OUTPUT"
-            echo "conflict_files=" >> "$GITHUB_OUTPUT"
-            echo "pr_branch=" >> "$GITHUB_OUTPUT"
-            echo "✅ Branches already in sync - no back-merge needed"
+            echo "already_merged=true"  >> "$GITHUB_OUTPUT"
+            echo "had_conflict=false"   >> "$GITHUB_OUTPUT"
+            echo "conflict_files="      >> "$GITHUB_OUTPUT"
+            echo "pr_branch="           >> "$GITHUB_OUTPUT"
+            echo "✅ Branches already in sync — no back-merge needed"
             exit 0
           fi
-          
+
           echo "already_merged=false" >> "$GITHUB_OUTPUT"
-          
-          # Always work on a dedicated branch — we always raise a PR
+
           PR_BRANCH="chore/back-merge-${{ inputs.prev_release_branch }}"
           git checkout -b "$PR_BRANCH"
 
@@ -249,7 +241,6 @@ jobs:
             echo "had_conflict=true" >> "$GITHUB_OUTPUT"
             CONFLICT_LIST=$(echo "$CONFLICTS" | tr '\n' ',')
             echo "conflict_files=$CONFLICT_LIST" >> "$GITHUB_OUTPUT"
-            # Stage conflict markers so PR diff is visible
             git add -A
             git commit -m "chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} [CONFLICTS — needs resolution]"
             echo "⚠️  Conflicts in: $CONFLICTS"
@@ -309,48 +300,36 @@ jobs:
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
           echo "PR created: $PR_URL"
 
-      - name: Notify Slack — back-merge status (threaded)
+      - name: Notify Slack — back-merge status
         if: env.DRY_RUN == 'false'
         run: node scripts/slack.js
         env:
-          SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_ID:     ${{ vars.SLACK_CHANNEL_ID }}
-          NOTIFICATION_TYPE:    backmerge
-          NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
-          PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
-          PR_BRANCH:            ${{ steps.merge.outputs.pr_branch }}
-          PR_URL:               ${{ steps.create_pr.outputs.pr_url }}
-          ALREADY_MERGED:       ${{ steps.merge.outputs.already_merged }}
-          HAD_CONFLICT:         ${{ steps.merge.outputs.had_conflict }}
-          CONFLICT_FILES:       ${{ steps.merge.outputs.conflict_files }}
-          THREAD_TS:            ${{ needs.slack_start.outputs.thread_ts }}
-          RUN_URL:              ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SLACK_BOT_TOKEN:     ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID:    ${{ vars.SLACK_CHANNEL_ID }}
+          NOTIFICATION_TYPE:   backmerge
+          NEW_VERSION_LABEL:   ${{ env.NEW_VERSION_LABEL }}
+          PREV_RELEASE_BRANCH: ${{ env.PREV_RELEASE_BRANCH }}
+          PR_BRANCH:           ${{ steps.merge.outputs.pr_branch }}
+          PR_URL:              ${{ steps.create_pr.outputs.pr_url }}
+          ALREADY_MERGED:      ${{ steps.merge.outputs.already_merged }}
+          HAD_CONFLICT:        ${{ steps.merge.outputs.had_conflict }}
+          CONFLICT_FILES:      ${{ steps.merge.outputs.conflict_files }}
+          THREAD_TS:           ${{ needs.slack_start.outputs.thread_ts }}
+          RUN_URL:             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
       - name: Summarise result
         run: |
           if [ "${{ steps.merge.outputs.already_merged }}" = "true" ]; then
             echo "✅ Branches already in sync — no back-merge needed."
-            echo "    Proceeding automatically with release cut steps."
           elif [ "${{ steps.merge.outputs.had_conflict }}" = "true" ]; then
-            echo "⚠️  Conflicts detected in back-merge PR."
-            echo "    1. Resolve conflicts and merge the PR into develop"
-            echo "    2. Workflow will continue automatically after merge"
+            echo "⚠️  Conflicts detected — resolve and merge the PR, workflow continues automatically."
           else
-            echo "✅ Clean merge — PR raised with no conflicts."
-            echo "    1. Merge the PR into develop"
-            echo "    2. Workflow will continue automatically after merge"
+            echo "✅ Clean merge — merge the PR into develop, workflow continues automatically."
           fi
 
 
 # ============================================================
-# JOB 1b — Manual approval when branches already in sync
-# ============================================================
-# When the previous release branch is already merged into develop
-# (manual back-merge done), this job requires manual approval to proceed.
-# This ensures the "already merged" state is intentional and verified.
-#
-# The environment protection rule will pause execution here until
-# an authorized reviewer approves the deployment.
+# JOB 1b — Approval gate when branches already in sync
 # ============================================================
   approve_already_merged:
     name: "1b · Approve continuation (branches already in sync)"
@@ -362,42 +341,16 @@ jobs:
       url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     steps:
-      - name: Approval checkpoint - verify manual back-merge
+      - name: Approval checkpoint
         run: |
-          echo "✅ Branches are already in sync - no back-merge needed"
-          echo ""
+          echo "✅ Branches are already in sync — no back-merge needed"
           echo "Previous release branch: ${{ env.PREV_RELEASE_BRANCH }}"
-          echo "Target branch: develop"
-          echo ""
-          echo "This indicates the back-merge was likely completed manually."
-          echo "An authorized reviewer must approve this deployment to continue."
-          echo ""
-          echo "After approval, the workflow will proceed to:"
-          echo "  • Step 2: Cut new release branch"
-          echo "  • Step 3: Rotate tags"
-          echo "  • Step 4: Update Adobe Cloud Manager"
-          echo "  • Step 5: Update Jira artifacts"
-          echo "  • Step 6: Notify open PRs"
-          echo "  • Step 7: Send final Slack summary"
-          echo ""
-          echo "⏸️  Waiting for approval..."
+          echo "An authorized reviewer approved this deployment."
+          echo "Proceeding with release cut steps..."
 
 
 # ============================================================
-# JOB 1c — Wait for back-merge PR to be merged
-# ============================================================
-# Workflow actively polls the PR status and waits until it's merged.
-# This ensures the PR is actually merged before proceeding to Job 2.
-#
-# What to do:
-#   1. Open the PR link from Slack notification
-#   2. Review the changes
-#   3. If conflicts exist: resolve them, commit, and push
-#   4. Merge the PR into develop
-#   5. This workflow will automatically continue once the PR is merged
-#
-# The polling mechanism checks PR status every 30 seconds and times out
-# after 2 hours if the PR is not merged.
+# JOB 1c — Poll and wait for back-merge PR to be merged
 # ============================================================
   await_pr_merge:
     name: "1c · Wait for back-merge PR merge"
@@ -409,7 +362,7 @@ jobs:
       - name: Wait for PR to be merged into develop
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          PR_URL: ${{ needs.back_merge.outputs.pr_url }}
+          PR_URL:   ${{ needs.back_merge.outputs.pr_url }}
         run: |
           echo "⏳ Waiting for back-merge PR to be merged into develop..."
           echo "PR URL: $PR_URL"
@@ -421,29 +374,26 @@ jobs:
           echo "  4. Merge the PR into develop"
           echo "  5. This workflow will automatically continue once merged"
           echo ""
-          
-          # Extract PR number from URL
+
           PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
-          
+
           if [ -z "$PR_NUMBER" ]; then
             echo "::error::Could not extract PR number from URL: $PR_URL"
             exit 1
           fi
-          
+
           echo "Monitoring PR #$PR_NUMBER..."
-          echo ""
-          
-          MAX_WAIT=7200  # 2 hours timeout
-          INTERVAL=30    # Check every 30 seconds
+
+          MAX_WAIT=7200
+          INTERVAL=30
           ELAPSED=0
           CHECK_COUNT=0
-          
+
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             CHECK_COUNT=$((CHECK_COUNT + 1))
-            
-            # Check PR status using GitHub CLI
+
             PR_STATE=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
-            
+
             if [ "$PR_STATE" = "MERGED" ]; then
               echo ""
               echo "✅ PR #$PR_NUMBER has been merged into develop"
@@ -454,21 +404,17 @@ jobs:
               echo "::error::PR #$PR_NUMBER was closed without merging"
               echo "::error::Please reopen and merge the PR, or restart the workflow"
               exit 1
-            elif [ "$PR_STATE" = "OPEN" ]; then
+            else
               MINUTES_ELAPSED=$((ELAPSED / 60))
               MINUTES_REMAINING=$(((MAX_WAIT - ELAPSED) / 60))
-              echo "[Check #$CHECK_COUNT] PR #$PR_NUMBER is still open - waiting... (${MINUTES_ELAPSED}m elapsed, ${MINUTES_REMAINING}m remaining)"
-            else
-              echo "[Check #$CHECK_COUNT] ⚠️  Could not determine PR state (received: $PR_STATE)"
+              echo "[Check #$CHECK_COUNT] PR #$PR_NUMBER is still open — waiting... (${MINUTES_ELAPSED}m elapsed, ${MINUTES_REMAINING}m remaining)"
             fi
-            
+
             sleep $INTERVAL
             ELAPSED=$((ELAPSED + INTERVAL))
           done
-          
-          echo ""
+
           echo "::error::Timeout: PR #$PR_NUMBER was not merged within $((MAX_WAIT/60)) minutes"
-          echo "::error::Please merge the PR manually and re-run the workflow"
           exit 1
 
 
@@ -485,16 +431,8 @@ jobs:
       (needs.approve_already_merged.result == 'success' || needs.await_pr_merge.result == 'success')
 
     steps:
-      - name: Debug job conditions
-        run: |
-          echo "=== Job Condition Debug ==="
-          echo "derive_release_metadata result: ${{ needs.derive_release_metadata.result }}"
-          echo "approve_already_merged result: ${{ needs.approve_already_merged.result }}"
-          echo "await_pr_merge result: ${{ needs.await_pr_merge.result }}"
-          echo "=========================="
-
       - name: Checkout develop
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           ref: develop
           fetch-depth: 0
@@ -517,11 +455,6 @@ jobs:
 
 # ============================================================
 # JOB 3 — Rotate tags
-#
-# On release cut for 2.03.0-minotaur:
-#   DELETE  2.02.0-beta          (previous pre-release tag)
-#   CREATE  2.02.0               (latest tag for previous branch)
-#   CREATE  2.03.0-beta          (pre-release tag for new branch)
 # ============================================================
   rotate_tags:
     name: "3 · Rotate tags"
@@ -535,7 +468,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
@@ -553,40 +486,35 @@ jobs:
           PREV_VERSION="${{ needs.derive_release_metadata.outputs.prev_version }}"
           PREV_CODENAME="${{ needs.derive_release_metadata.outputs.prev_codename }}"
           TAG="${{ needs.derive_release_metadata.outputs.prev_latest_tag }}"
-
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "[DRY RUN] Would create latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}"
-            exit 0
-          fi
-
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: $TAG on ${{ env.PREV_RELEASE_BRANCH }}" && exit 0
           gh release create "$TAG" \
             --target "${{ env.PREV_RELEASE_BRANCH }}" \
             --title  "Release ${PREV_VERSION} ${PREV_CODENAME}" \
             --notes  "Stable release - ${PREV_VERSION} ${PREV_CODENAME}" \
             --latest
-          echo "Created latest tag: $TAG on ${{ env.PREV_RELEASE_BRANCH }}"
+          echo "✅ Created latest tag: $TAG → ${{ env.PREV_RELEASE_BRANCH }}"
 
       - name: Create pre-release tag for new release
         run: |
           NEW_VERSION="${{ needs.derive_release_metadata.outputs.new_version }}"
           NEW_CODENAME="${{ needs.derive_release_metadata.outputs.new_codename }}"
           TAG="${{ needs.derive_release_metadata.outputs.new_prerelease_tag }}"
-
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "[DRY RUN] Would create pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}"
-            exit 0
-          fi
-
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would create: $TAG on ${{ env.NEW_RELEASE_BRANCH }}" && exit 0
           gh release create "$TAG" \
             --target "${{ env.NEW_RELEASE_BRANCH }}" \
             --title  "Release ${NEW_VERSION} ${NEW_CODENAME}" \
             --notes  "Pre-release - ${NEW_VERSION} ${NEW_CODENAME}" \
             --prerelease
-          echo "Created pre-release tag: $TAG on ${{ env.NEW_RELEASE_BRANCH }}"
+          echo "✅ Created pre-release tag: $TAG → ${{ env.NEW_RELEASE_BRANCH }}"
 
 
 # ============================================================
 # JOB 4 — Adobe Cloud Manager: update pipeline + trigger stage
+#
+# Key fixes applied:
+#   1. Added x-api-key header to ALL ACM API calls (required by Adobe)
+#   2. Changed pipeline branch update from PUT → PATCH (correct method)
+#   3. x-api-key value = ACM_CLIENT_ID (same credential, different header)
 # ============================================================
   adobe_cloud_manager:
     name: "4 · Adobe Cloud Manager"
@@ -611,31 +539,46 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "acm_token=$TOKEN" >> "$GITHUB_OUTPUT"
 
-      - name: Patch pipeline branch to new release branch
+      - name: Fetch current pipeline config
+        id: fetch_pipeline
         run: |
-          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would patch ACM pipeline branch" && exit 0
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would fetch pipeline config" && exit 0
 
           PIPELINE=$(curl -s \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}")
 
-          UPDATED=$(echo "$PIPELINE" | node -e "
+          echo "pipeline=$PIPELINE" >> "$GITHUB_OUTPUT"
+          echo "✅ Pipeline config fetched"
+
+      - name: Patch pipeline branch to new release branch
+        run: |
+          [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would patch ACM pipeline branch to ${{ env.NEW_RELEASE_BRANCH }}" && exit 0
+
+          UPDATED=$(echo '${{ steps.fetch_pipeline.outputs.pipeline }}' | node -e "
             let d=''; process.stdin.on('data',c=>d+=c).on('end',()=>{
               const p = JSON.parse(d);
               (p.phases||[]).forEach(ph=>{ if(ph.type==='BUILD') ph.branch='${{ env.NEW_RELEASE_BRANCH }}'; });
               console.log(JSON.stringify(p));
             })")
 
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}" \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
             -H "Content-Type: application/json" \
             -d "$UPDATED")
 
           echo "Pipeline PATCH → HTTP $HTTP_CODE"
-          [ "$HTTP_CODE" = "200" ] && echo "✅ Pipeline branch updated" || echo "::warning::PATCH returned $HTTP_CODE — verify in Cloud Manager"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Pipeline branch updated to ${{ env.NEW_RELEASE_BRANCH }}"
+          else
+            echo "::error::PATCH returned $HTTP_CODE — verify in Cloud Manager"
+            exit 1
+          fi
 
       - name: Trigger stage pipeline execution
         run: |
@@ -645,15 +588,19 @@ jobs:
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution" \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
             -H "Content-Type: application/json")
 
           echo "Pipeline trigger → HTTP $HTTP_CODE"
-          [ "$HTTP_CODE" = "201" ] && echo "✅ Stage pipeline triggered" || echo "::warning::Trigger returned $HTTP_CODE — verify manually in Cloud Manager"
+          if [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Stage pipeline triggered successfully"
+          else
+            echo "::warning::Trigger returned $HTTP_CODE — verify manually in Cloud Manager"
+          fi
 
 
 # ============================================================
-# JOB 5 — Compare tags, classify tickets, update Jira filter
-#          and update release ticket description
+# JOB 5 — Compare tags, classify tickets, update Jira
 # ============================================================
   jira_release:
     name: "5 · Jira release updates"
@@ -663,14 +610,14 @@ jobs:
       !cancelled() &&
       needs.rotate_tags.result == 'success'
     outputs:
-      confirmed_tickets: ${{ steps.classify.outputs.confirmed_tickets }}
+      confirmed_tickets:     ${{ steps.classify.outputs.confirmed_tickets }}
       untagged_open_tickets: ${{ steps.classify.outputs.untagged_open_tickets }}
-      ticket_count: ${{ steps.update_ticket.outputs.jira_ticket_count }}
-      filter_url: ${{ steps.create_filter.outputs.filter_url }}
+      ticket_count:          ${{ steps.update_ticket.outputs.jira_ticket_count }}
+      filter_url:            ${{ steps.create_filter.outputs.filter_url }}
 
     steps:
       - name: Checkout (to run scripts)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
@@ -680,12 +627,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          PREV_TAG="${{ needs.derive_release_metadata.outputs.prev_latest_tag }}"      # e.g. 2.02.0
-          NEW_TAG="${{ needs.derive_release_metadata.outputs.new_prerelease_tag }}"     # e.g. 2.03.0-beta
+          PREV_TAG="${{ needs.derive_release_metadata.outputs.prev_latest_tag }}"
+          NEW_TAG="${{ needs.derive_release_metadata.outputs.new_prerelease_tag }}"
 
           echo "Comparing $PREV_TAG → $NEW_TAG"
 
-          # Get all commit messages between the two tags
           COMMITS=$(git log "${PREV_TAG}..${NEW_TAG}" --pretty=format:"%s %b" 2>/dev/null \
                     || git log "origin/${{ env.PREV_RELEASE_BRANCH }}..origin/${{ env.NEW_RELEASE_BRANCH }}" \
                        --pretty=format:"%s %b")
@@ -714,26 +660,26 @@ jobs:
         id: create_filter
         run: node scripts/update_jira_filter.js
         env:
-          JIRA_BASE_URL:      ${{ vars.JIRA_BASE_URL }}
-          JIRA_USER_EMAIL:    ${{ vars.JIRA_USER_EMAIL }}
-          JIRA_API_TOKEN:     ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_PROJECT_KEY:   ${{ vars.JIRA_PROJECT_KEY }}
-          NEW_VERSION_LABEL:  ${{ env.NEW_VERSION_LABEL }}
-          DRY_RUN:            ${{ env.DRY_RUN }}
+          JIRA_BASE_URL:     ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:   ${{ vars.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN:    ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY:  ${{ vars.JIRA_PROJECT_KEY }}
+          NEW_VERSION_LABEL: ${{ env.NEW_VERSION_LABEL }}
+          DRY_RUN:           ${{ env.DRY_RUN }}
 
       - name: Update release ticket description
         id: update_ticket
         run: node scripts/update_release_ticket.js
         env:
-          JIRA_BASE_URL:          ${{ vars.JIRA_BASE_URL }}
-          JIRA_USER_EMAIL:        ${{ vars.JIRA_USER_EMAIL }}
-          JIRA_API_TOKEN:         ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_PROJECT_KEY:       ${{ vars.JIRA_PROJECT_KEY }}
-          JIRA_RELEASE_TICKET:    ${{ inputs.jira_release_ticket }}
-          FILTER_URL:             ${{ steps.create_filter.outputs.filter_url }}
-          NEW_VERSION_LABEL:      ${{ env.NEW_VERSION_LABEL }}
-          UNTAGGED_OPEN_TICKETS:  ${{ steps.classify.outputs.untagged_open_tickets }}
-          DRY_RUN:                ${{ env.DRY_RUN }}
+          JIRA_BASE_URL:         ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL:       ${{ vars.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN:        ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY:      ${{ vars.JIRA_PROJECT_KEY }}
+          JIRA_RELEASE_TICKET:   ${{ inputs.jira_release_ticket }}
+          FILTER_URL:            ${{ steps.create_filter.outputs.filter_url }}
+          NEW_VERSION_LABEL:     ${{ env.NEW_VERSION_LABEL }}
+          UNTAGGED_OPEN_TICKETS: ${{ steps.classify.outputs.untagged_open_tickets }}
+          DRY_RUN:               ${{ env.DRY_RUN }}
 
 
 # ============================================================
@@ -750,7 +696,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GH_TOKEN }}
 
@@ -783,48 +729,31 @@ jobs:
       needs.slack_start.result == 'success'
 
     steps:
-      - name: Checkout repository for Slack notification script
-        uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Calculate workflow duration
-        id: duration
-        run: |
-          START_TIME="${{ github.event.repository.pushed_at }}"
-          END_TIME=$(date -u +%s)
-          # Fallback if start time not available
-          if [ -z "$START_TIME" ]; then
-            echo "workflow_duration=N/A" >> "$GITHUB_OUTPUT"
-          else
-            START_EPOCH=$(date -d "$START_TIME" +%s 2>/dev/null || echo "0")
-            DURATION=$((END_TIME - START_EPOCH))
-            MINUTES=$((DURATION / 60))
-            SECONDS=$((DURATION % 60))
-            echo "workflow_duration=${MINUTES}m ${SECONDS}s" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Send release cut summary to Slack (threaded)
+      - name: Send release cut summary to Slack
         run: node scripts/slack.js
         env:
-          SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_ID:     ${{ vars.SLACK_CHANNEL_ID }}
-          NOTIFICATION_TYPE:    summary
-          NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
-          NEW_RELEASE_BRANCH:   ${{ env.NEW_RELEASE_BRANCH }}
-          NEW_PRERELEASE_TAG:   ${{ needs.derive_release_metadata.outputs.new_prerelease_tag }}
-          PREV_LATEST_TAG:      ${{ needs.derive_release_metadata.outputs.prev_latest_tag }}
-          PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
-          TICKET_COUNT:         ${{ needs.jira_release.outputs.ticket_count }}
-          FILTER_URL:           ${{ needs.jira_release.outputs.filter_url }}
-          JIRA_RELEASE_TICKET:  ${{ inputs.jira_release_ticket }}
-          JIRA_BASE_URL:        ${{ vars.JIRA_BASE_URL }}
-          UNTAGGED_TICKETS:     ${{ needs.jira_release.outputs.untagged_open_tickets }}
-          ACM_RESULT:           ${{ needs.adobe_cloud_manager.result }}
-          JIRA_RESULT:          ${{ needs.jira_release.result }}
-          PRS_RESULT:           ${{ needs.notify_open_prs.result }}
-          GITHUB_ACTOR:         ${{ github.actor }}
-          RUN_NUMBER:           ${{ github.run_number }}
-          RUN_URL:              ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          WORKFLOW_DURATION:    ${{ steps.duration.outputs.workflow_duration }}
-          THREAD_TS:            ${{ needs.slack_start.outputs.thread_ts }}
+          SLACK_BOT_TOKEN:     ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID:    ${{ vars.SLACK_CHANNEL_ID }}
+          NOTIFICATION_TYPE:   summary
+          NEW_VERSION_LABEL:   ${{ env.NEW_VERSION_LABEL }}
+          NEW_RELEASE_BRANCH:  ${{ env.NEW_RELEASE_BRANCH }}
+          NEW_PRERELEASE_TAG:  ${{ needs.derive_release_metadata.outputs.new_prerelease_tag }}
+          PREV_LATEST_TAG:     ${{ needs.derive_release_metadata.outputs.prev_latest_tag }}
+          PREV_RELEASE_BRANCH: ${{ env.PREV_RELEASE_BRANCH }}
+          TICKET_COUNT:        ${{ needs.jira_release.outputs.ticket_count }}
+          FILTER_URL:          ${{ needs.jira_release.outputs.filter_url }}
+          JIRA_RELEASE_TICKET: ${{ inputs.jira_release_ticket }}
+          JIRA_BASE_URL:       ${{ vars.JIRA_BASE_URL }}
+          UNTAGGED_TICKETS:    ${{ needs.jira_release.outputs.untagged_open_tickets }}
+          ACM_RESULT:          ${{ needs.adobe_cloud_manager.result }}
+          JIRA_RESULT:         ${{ needs.jira_release.result }}
+          PRS_RESULT:          ${{ needs.notify_open_prs.result }}
+          GITHUB_ACTOR:        ${{ github.actor }}
+          RUN_NUMBER:          ${{ github.run_number }}
+          RUN_URL:             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          THREAD_TS:           ${{ needs.slack_start.outputs.thread_ts }}
