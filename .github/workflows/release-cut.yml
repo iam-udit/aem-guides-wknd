@@ -348,16 +348,21 @@ jobs:
 # When the previous release branch is already merged into develop
 # (manual back-merge done), this job requires manual approval to proceed.
 # This ensures the "already merged" state is intentional and verified.
+#
+# The environment protection rule will pause execution here until
+# an authorized reviewer approves the deployment.
 # ============================================================
   approve_already_merged:
     name: "1b · Approve continuation (branches already in sync)"
     runs-on: ubuntu-latest
     needs: back_merge
     if: needs.back_merge.outputs.already_merged == 'true'
-    environment: release-approval
+    environment:
+      name: release-approval
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     steps:
-      - name: Request approval to proceed
+      - name: Approval checkpoint - verify manual back-merge
         run: |
           echo "✅ Branches are already in sync - no back-merge needed"
           echo ""
@@ -365,15 +370,17 @@ jobs:
           echo "Target branch: develop"
           echo ""
           echo "This indicates the back-merge was likely completed manually."
-          echo "Please verify this is correct before approving to continue with the release cut."
+          echo "An authorized reviewer must approve this deployment to continue."
           echo ""
-          echo "If approved, the workflow will proceed to:"
+          echo "After approval, the workflow will proceed to:"
           echo "  • Step 2: Cut new release branch"
           echo "  • Step 3: Rotate tags"
           echo "  • Step 4: Update Adobe Cloud Manager"
           echo "  • Step 5: Update Jira artifacts"
           echo "  • Step 6: Notify open PRs"
           echo "  • Step 7: Send final Slack summary"
+          echo ""
+          echo "⏸️  Waiting for approval..."
 
 
 # ============================================================
@@ -475,7 +482,10 @@ jobs:
     if: |
       always() &&
       needs.derive_release_metadata.result == 'success' &&
-      (needs.approve_already_merged.result == 'success' || needs.await_pr_merge.result == 'success')
+      (needs.approve_already_merged.result == 'success' ||
+       needs.await_pr_merge.result == 'success' ||
+       (needs.approve_already_merged.result == 'skipped' && needs.await_pr_merge.result == 'success') ||
+       (needs.approve_already_merged.result == 'success' && needs.await_pr_merge.result == 'skipped'))
 
     steps:
       - name: Checkout develop
