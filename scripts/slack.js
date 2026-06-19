@@ -18,8 +18,8 @@
  *     NEW_VERSION_LABEL, GITHUB_ACTOR, RUN_NUMBER, RUN_URL
  *   
  *   For 'backmerge':
- *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, PR_BRANCH, PR_URL, HAD_CONFLICT,
- *     CONFLICT_FILES (comma-separated), THREAD_TS (from start message)
+ *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, PR_BRANCH, PR_URL, ALREADY_MERGED,
+ *     HAD_CONFLICT, CONFLICT_FILES (comma-separated), THREAD_TS (from start message)
  *   
  *   For 'summary':
  *     NEW_VERSION_LABEL, NEW_RELEASE_BRANCH, NEW_PRERELEASE_TAG,
@@ -169,6 +169,7 @@ function buildStartMessage() {
  * @returns {object} Slack message payload describing clean merge or conflict status.
  */
 function buildBackmergeReply() {
+  const alreadyMerged = process.env.ALREADY_MERGED === 'true';
   const hadConflict = process.env.HAD_CONFLICT === 'true';
   const prUrl = process.env.PR_URL || '';
   const prevBranch = process.env.PREV_RELEASE_BRANCH || '';
@@ -177,6 +178,81 @@ function buildBackmergeReply() {
 
   if (!threadTs) {
     console.log('[Slack] THREAD_TS not provided, posting as standalone message');
+  }
+
+  // Handle "already merged" scenario - branches are in sync
+  if (alreadyMerged) {
+    const runUrl = process.env.RUN_URL || '';
+    
+    const payload = {
+      channel: CHANNEL_ID,
+      text: ':white_check_mark: Back-merge Not Required (Already in Sync) - Approval Needed',
+      blocks: [
+        {
+          type: 'header',
+          text: {
+            type: 'plain_text',
+            text: ':white_check_mark: Back-merge Not Required (Already in Sync)',
+            emoji: true
+          }
+        },
+        {
+          type: 'section',
+          fields: [
+            {
+              type: 'mrkdwn',
+              text: '*Stage*\nBack-merge'
+            },
+            {
+              type: 'mrkdwn',
+              text: '*Status*\nAwaiting Approval'
+            }
+          ]
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Scope*\nPrevious release branch \`${prevBranch}\` is already merged into \`develop\`.`
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*Result*\nNo changes detected between branches — back-merge was likely completed manually.'
+          }
+        },
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*Required Action*\n• Verify that the manual back-merge is correct and intentional\n• Review the workflow run and approve to continue\n• Workflow will proceed with remaining release cut steps after approval'
+          }
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: 'Review & Approve Workflow',
+                emoji: false
+              },
+              url: runUrl,
+              style: 'primary'
+            }
+          ]
+        }
+      ]
+    };
+
+    if (threadTs) {
+      payload.thread_ts = threadTs;
+    }
+
+    return payload;
   }
 
   const payload = hadConflict

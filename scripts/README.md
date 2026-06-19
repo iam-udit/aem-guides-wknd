@@ -66,7 +66,22 @@ Use **Secrets** for credentials/tokens and **Variables** for non-sensitive confi
 
 > **Important:** Earlier versions of this documentation referenced `SLACK_WEBHOOK_URL`. The current workflow uses `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` instead.
 
-### 3. Verify Your Self-Hosted Runner
+### 3. Configure Environment Protection for Approval
+
+The workflow requires manual approval when branches are already in sync (manual back-merge detected).
+
+**Setup:**
+1. Go to **Repository → Settings → Environments**
+2. Click **New environment**
+3. Name it: `release-approval`
+4. Under **Environment protection rules**, enable:
+   - ✅ **Required reviewers**
+   - Add team members who can approve release continuations
+5. Click **Save protection rules**
+
+This ensures that when the workflow detects branches are already merged, it will pause and require approval before proceeding with the release cut.
+
+### 4. Verify Your Self-Hosted Runner
 
 Confirm runner is registered: **Repository → Settings → Actions → Runners**
 
@@ -75,8 +90,6 @@ Required tools on the runner (all standard on Linux):
 - `gh` CLI (`gh --version`) - used to monitor pull request merge status
 - `node` (`node --version`)
 - `curl`
-
-**Note:** The workflow no longer requires a protected environment (`release-gate`). If you previously configured one, you can safely delete it from **Repository → Settings → Environments**.
 
 ---
 
@@ -129,8 +142,9 @@ If the branch format does not match this convention, the workflow fails early in
 |-----|-------------|
 | **Step 0 - Derive metadata** | Validates branch naming convention and derives versions, codenames, and tag names used by downstream jobs |
 | **Step 0a - Slack start** | Posts the initial threaded Slack message for workflow visibility |
-| **Step 1 - Back-merge** | Merges previous release branch into `develop` via a pull request (always - even for clean merges). On conflict: conflict markers committed, pull request raised, Slack alert sent. |
-| **Step 1b - Wait for PR merge** | Actively polls the back-merge pull request status every 30 seconds until it is merged. Workflow automatically continues once pull request is merged into `develop`. Times out after 2 hours if not merged. |
+| **Step 1 - Back-merge** | Checks if branches are already in sync. If not, merges previous release branch into `develop` via a pull request (always - even for clean merges). On conflict: conflict markers committed, pull request raised, Slack alert sent. |
+| **Step 1b - Approval gate** | **(Conditional)** When branches are already in sync (manual back-merge detected), requires manual approval via GitHub environment protection before proceeding. Ensures the "already merged" state is intentional. |
+| **Step 1c - Wait for PR merge** | **(Conditional)** When a back-merge PR is created, actively polls the pull request status every 30 seconds until it is merged. Workflow automatically continues once pull request is merged into `develop`. Times out after 2 hours if not merged. |
 | **Step 2 - Cut branch** | Creates new release branch from `develop` and pushes to repository |
 | **Step 3 - Rotate tags** | Deletes previous pre-release tag, creates latest tag for previous release, creates pre-release tag for new release |
 | **Step 4 - ACM pipeline** | Obtains Adobe IMS token, updates stage pipeline branch to new release branch, triggers stage build |
@@ -246,12 +260,50 @@ https://jsw.ibm.com/browse/ADCMS-XXXXX (only shown if Rule 4 tickets exist)
 
 ---
 
-## Merge Conflict Flow
+## Back-merge Flow
+
+### Scenario 1: Branches Already in Sync (Manual Back-merge Already Done)
+
+```
+Step 1 detects no changes between branches
+  ↓
+Slack notification: branches already in sync - approval needed
+  ↓
+Step 1b waits for manual approval via GitHub environment protection
+  ↓
+You verify the manual back-merge is correct and approve the workflow
+  ↓
+Step 1c is skipped (no PR to wait for)
+  ↓
+Step 2 starts (create release branch)
+```
+
+**Note:** When branches are already in sync, the workflow requires manual approval to ensure this is intentional. This prevents accidental continuation when the back-merge state is unexpected.
+
+### Scenario 2: Clean Merge (No Conflicts)
+
+```
+Step 1 performs clean merge
+  ↓
+Creates pull request: chore/back-merge-release/x.x.x to develop
+  ↓
+Slack alert: clean merge + pull request link
+  ↓
+Step 1b starts polling pull request status (checks every 30 seconds)
+  ↓
+You review and merge pull request
+  ↓
+Step 1b detects pull request is merged and workflow automatically continues
+  ↓
+Step 2 starts (create release branch)
+```
+
+### Scenario 3: Merge Conflicts
 
 ```
 Step 1 detects conflict
   ↓
-Creates pull request: chore/back-merge-release/x.x.x-conflicts to develop
+Creates pull request: chore/back-merge-release/x.x.x to develop
   ↓
 Slack alert: conflicting files + pull request link + instructions
   ↓
@@ -264,7 +316,7 @@ Step 1b detects pull request is merged and workflow automatically continues
 Step 2 starts (create release branch)
 ```
 
-**Note:** The workflow now automatically detects when the pull request is merged and continues. You no longer need to manually approve or trigger a continuation workflow.
+**Note:** The workflow automatically detects when the pull request is merged and continues. You no longer need to manually approve or trigger a continuation workflow.
 
 ---
 

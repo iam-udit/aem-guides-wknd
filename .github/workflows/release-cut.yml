@@ -170,6 +170,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [derive_release_metadata, slack_start]
     outputs:
+      already_merged: ${{ steps.merge.outputs.already_merged }}
       had_conflict: ${{ steps.merge.outputs.had_conflict }}
       conflict_files: ${{ steps.merge.outputs.conflict_files }}
       pr_url: ${{ steps.create_pr.outputs.pr_url }}
@@ -217,9 +218,25 @@ jobs:
       - name: Attempt merge into a PR branch
         id: merge
         run: |
+          # Check if branches are already in sync (manual back-merge already done)
+          git fetch origin "${{ env.PREV_RELEASE_BRANCH }}"
+          
+          # Check if there are any differences between develop and previous release branch
+          DIFF_COUNT=$(git rev-list --count HEAD..origin/${{ env.PREV_RELEASE_BRANCH }} 2>/dev/null || echo "0")
+          
+          if [ "$DIFF_COUNT" = "0" ]; then
+            echo "already_merged=true" >> "$GITHUB_OUTPUT"
+            echo "had_conflict=false" >> "$GITHUB_OUTPUT"
+            echo "conflict_files=" >> "$GITHUB_OUTPUT"
+            echo "pr_branch=" >> "$GITHUB_OUTPUT"
+            echo "✅ Branches already in sync - no back-merge needed"
+            exit 0
+          fi
+          
+          echo "already_merged=false" >> "$GITHUB_OUTPUT"
+          
           # Always work on a dedicated branch — we always raise a PR
           PR_BRANCH="chore/back-merge-${{ inputs.prev_release_branch }}"
-          git fetch origin "${{ env.PREV_RELEASE_BRANCH }}"
           git checkout -b "$PR_BRANCH"
 
           git merge --no-ff "origin/${{ env.PREV_RELEASE_BRANCH }}" \
@@ -245,12 +262,12 @@ jobs:
           echo "pr_branch=$PR_BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Push PR branch
-        if: env.DRY_RUN == 'false'
+        if: env.DRY_RUN == 'false' && steps.merge.outputs.already_merged != 'true'
         run: git push origin "${{ steps.merge.outputs.pr_branch }}"
 
       - name: Create back-merge PR
         id: create_pr
-        if: env.DRY_RUN == 'false'
+        if: env.DRY_RUN == 'false' && steps.merge.outputs.already_merged != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
@@ -303,25 +320,64 @@ jobs:
           PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
           PR_BRANCH:            ${{ steps.merge.outputs.pr_branch }}
           PR_URL:               ${{ steps.create_pr.outputs.pr_url }}
+          ALREADY_MERGED:       ${{ steps.merge.outputs.already_merged }}
           HAD_CONFLICT:         ${{ steps.merge.outputs.had_conflict }}
           CONFLICT_FILES:       ${{ steps.merge.outputs.conflict_files }}
           THREAD_TS:            ${{ needs.slack_start.outputs.thread_ts }}
+          RUN_URL:              ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-      - name: Summarise result for approval gate
+      - name: Summarise result
         run: |
-          if [ "${{ steps.merge.outputs.had_conflict }}" = "true" ]; then
+          if [ "${{ steps.merge.outputs.already_merged }}" = "true" ]; then
+            echo "✅ Branches already in sync — no back-merge needed."
+            echo "    Proceeding automatically with release cut steps."
+          elif [ "${{ steps.merge.outputs.had_conflict }}" = "true" ]; then
             echo "⚠️  Conflicts detected in back-merge PR."
             echo "    1. Resolve conflicts and merge the PR into develop"
-            echo "    2. Then come back here → Review deployments → Approve"
+            echo "    2. Workflow will continue automatically after merge"
           else
             echo "✅ Clean merge — PR raised with no conflicts."
             echo "    1. Merge the PR into develop"
-            echo "    2. Then come back here → Review deployments → Approve"
+            echo "    2. Workflow will continue automatically after merge"
           fi
 
 
 # ============================================================
-# JOB 1b — Wait for back-merge PR to be merged
+# JOB 1b — Manual approval when branches already in sync
+# ============================================================
+# When the previous release branch is already merged into develop
+# (manual back-merge done), this job requires manual approval to proceed.
+# This ensures the "already merged" state is intentional and verified.
+# ============================================================
+  approve_already_merged:
+    name: "1b · Approve continuation (branches already in sync)"
+    runs-on: ubuntu-latest
+    needs: back_merge
+    if: needs.back_merge.outputs.already_merged == 'true'
+    environment: release-approval
+
+    steps:
+      - name: Request approval to proceed
+        run: |
+          echo "✅ Branches are already in sync - no back-merge needed"
+          echo ""
+          echo "Previous release branch: ${{ env.PREV_RELEASE_BRANCH }}"
+          echo "Target branch: develop"
+          echo ""
+          echo "This indicates the back-merge was likely completed manually."
+          echo "Please verify this is correct before approving to continue with the release cut."
+          echo ""
+          echo "If approved, the workflow will proceed to:"
+          echo "  • Step 2: Cut new release branch"
+          echo "  • Step 3: Rotate tags"
+          echo "  • Step 4: Update Adobe Cloud Manager"
+          echo "  • Step 5: Update Jira artifacts"
+          echo "  • Step 6: Notify open PRs"
+          echo "  • Step 7: Send final Slack summary"
+
+
+# ============================================================
+# JOB 1c — Wait for back-merge PR to be merged
 # ============================================================
 # Workflow actively polls the PR status and waits until it's merged.
 # This ensures the PR is actually merged before proceeding to Job 2.
@@ -337,9 +393,10 @@ jobs:
 # after 2 hours if the PR is not merged.
 # ============================================================
   await_pr_merge:
-    name: "1b · Wait for back-merge PR merge"
+    name: "1c · Wait for back-merge PR merge"
     runs-on: ubuntu-latest
     needs: back_merge
+    if: needs.back_merge.outputs.already_merged != 'true'
 
     steps:
       - name: Wait for PR to be merged into develop
@@ -414,7 +471,11 @@ jobs:
   cut_release_branch:
     name: "2 · Cut next release branch"
     runs-on: ubuntu-latest
-    needs: [derive_release_metadata, await_pr_merge]
+    needs: [derive_release_metadata, approve_already_merged, await_pr_merge]
+    if: |
+      always() &&
+      needs.derive_release_metadata.result == 'success' &&
+      (needs.approve_already_merged.result == 'success' || needs.await_pr_merge.result == 'success')
 
     steps:
       - name: Checkout develop
