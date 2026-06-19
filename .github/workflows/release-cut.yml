@@ -480,12 +480,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [derive_release_metadata, approve_already_merged, await_pr_merge]
     if: |
-      always() &&
+      !cancelled() &&
       needs.derive_release_metadata.result == 'success' &&
-      (needs.approve_already_merged.result == 'success' ||
-       needs.await_pr_merge.result == 'success' ||
-       (needs.approve_already_merged.result == 'skipped' && needs.await_pr_merge.result == 'success') ||
-       (needs.approve_already_merged.result == 'success' && needs.await_pr_merge.result == 'skipped'))
+      (needs.approve_already_merged.result == 'success' || needs.await_pr_merge.result == 'success')
 
     steps:
       - name: Checkout develop
