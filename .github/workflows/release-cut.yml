@@ -527,6 +527,9 @@ jobs:
     name: "3 · Rotate tags"
     runs-on: ubuntu-latest
     needs: [derive_release_metadata, cut_release_branch]
+    if: |
+      !cancelled() &&
+      needs.cut_release_branch.result == 'success'
     env:
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
@@ -589,6 +592,9 @@ jobs:
     name: "4 · Adobe Cloud Manager"
     runs-on: ubuntu-latest
     needs: [derive_release_metadata, rotate_tags]
+    if: |
+      !cancelled() &&
+      needs.rotate_tags.result == 'success'
 
     steps:
       - name: Get Adobe IMS access token
@@ -653,6 +659,9 @@ jobs:
     name: "5 · Jira release updates"
     runs-on: ubuntu-latest
     needs: [derive_release_metadata, rotate_tags]
+    if: |
+      !cancelled() &&
+      needs.rotate_tags.result == 'success'
     outputs:
       confirmed_tickets: ${{ steps.classify.outputs.confirmed_tickets }}
       untagged_open_tickets: ${{ steps.classify.outputs.untagged_open_tickets }}
@@ -734,6 +743,10 @@ jobs:
     name: "6 · Notify open PRs"
     runs-on: ubuntu-latest
     needs: [derive_release_metadata, jira_release, adobe_cloud_manager]
+    if: |
+      !cancelled() &&
+      needs.jira_release.result == 'success' &&
+      needs.adobe_cloud_manager.result == 'success'
 
     steps:
       - name: Checkout
