@@ -147,10 +147,68 @@ If the branch format does not match this convention, the workflow fails early in
 | **Step 1c - Wait for PR merge** | **(Conditional)** When a back-merge PR is created, actively polls the pull request status every 30 seconds until it is merged. Workflow automatically continues once pull request is merged into `develop`. Times out after 2 hours if not merged. |
 | **Step 2 - Cut branch** | Creates new release branch from `develop` and pushes to repository |
 | **Step 3 - Rotate tags** | Deletes previous pre-release tag, creates latest tag for previous release, creates pre-release tag for new release |
-| **Step 4 - ACM pipeline** | Obtains Adobe IMS token, updates stage pipeline branch to new release branch, triggers stage build |
+| **Step 4 - ACM pipeline** | **(Optional)** Obtains Adobe IMS token, updates stage pipeline branch to new release branch, triggers stage build. Workflow continues if this fails. |
 | **Step 5 - Jira** | Extracts ticket IDs from git log between tags, applies 4 classification rules via Jira API, creates new filter, updates release ticket description |
 | **Step 6 - PR notify** | Comments on every open pull request targeting `develop` with retargeting instructions |
 | **Step 7 - Slack** | Posts complete release cut summary to release channel |
+
+---
+
+## Adobe Cloud Manager Integration (Optional Step)
+
+The Adobe Cloud Manager (ACM) integration is treated as an **optional step** in the release cut workflow. If ACM operations fail for any reason, the workflow will continue with all remaining jobs and complete successfully.
+
+### Why ACM is Optional
+
+ACM failures should not block the core release cut process. Common scenarios where ACM might fail include:
+- Pipeline already running (409 Conflict)
+- Invalid or expired credentials
+- Network connectivity issues
+- Insufficient permissions
+- Pipeline configuration errors
+- Rate limiting or service unavailability
+
+### How ACM Failures are Handled
+
+When any ACM step fails:
+1. **Workflow continues** - Jira updates and PR notifications proceed normally
+2. **Slack notification distinguishes** - Shows ACM status separately with a warning icon
+3. **Clear messaging** - Team is notified to update Cloud Manager manually
+4. **Core release succeeds** - The release cut is still considered successful
+
+### Slack Notification Behavior
+
+**When ACM succeeds:**
+- ✅ Release Cut Completed
+- Shows "Adobe Cloud Manager: Pipeline branch updated and triggered"
+
+**When ACM fails but core workflow succeeds:**
+- ✅ Release Cut Completed (ACM Warning)
+- Shows separate ACM section with warning icon
+- Includes error details and manual action required
+- Note: "Adobe Cloud Manager is an optional step. The release cut completed successfully."
+
+**When core workflow fails:**
+- ❌ Release Cut Failed
+- Shows failed core steps (Jira/PRs)
+- If ACM also failed, shows it separately as "Also failed, but this is not blocking"
+
+### Manual Recovery Steps
+
+When ACM fails, manually complete these steps in Adobe Cloud Manager:
+
+1. Log into Adobe Cloud Manager
+2. Navigate to your program's pipeline configuration
+3. Update the stage pipeline branch to the new release branch (e.g., `release-2.03.0-minotaur`)
+4. Trigger the stage pipeline execution manually
+5. Monitor the build progress in Cloud Manager
+
+### API Requirements
+
+The ACM integration requires:
+- **x-api-key header** - Must equal the ACM client ID on all API requests
+- **PATCH method** - Pipeline branch updates use PATCH, not PUT
+- **Valid credentials** - Client ID, client secret, and org ID must be current
 
 ---
 
@@ -208,11 +266,15 @@ After the workflow completes:
 | Runner queued but never starts | Check runner status: Repository → Settings → Actions → Runners |
 | `node` not found on runner | Install Node.js on the runner machine |
 | Back-merge PR polling times out | Merge the PR into `develop`, then re-run the workflow if needed |
-| ACM pipeline trigger returns non-201 | Verify `ACM_PIPELINE_ID`, `ACM_PROGRAM_ID`, and Adobe credentials |
+| ACM pipeline operations fail | **Workflow continues** - ACM is optional. Update pipeline manually in Cloud Manager. Check `ACM_CLIENT_ID`, `ACM_CLIENT_SECRET`, `ACM_ORG_ID` credentials. Verify `x-api-key` header is set correctly. |
+| ACM returns 401 Unauthorized | Verify Adobe IMS credentials are valid and not expired. Check client ID and secret match. |
+| ACM returns 409 Conflict | Pipeline is already running. Wait for current execution to complete, then manually trigger new build. |
+| ACM returns 404 Not Found | Verify `ACM_PROGRAM_ID` and `ACM_PIPELINE_ID` are correct for your Cloud Manager instance. |
 | No tickets found from tag compare | Ensure commit messages contain `ADCMS-XXXX` pattern; cherry-picks without ticket references need manual addition |
 | Filter creation fails | Verify Jira project key, Jira permissions, and fix-version existence |
 | Release ticket update fails | Verify the Jira release ticket exists and the bot user can edit/comment on it |
 | Slack notification not arriving | Verify `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`, and bot membership in the target channel |
+| Slack shows "ACM Warning" | ACM step failed but workflow completed successfully. Follow manual recovery steps to update Cloud Manager. |
 
 ---
 

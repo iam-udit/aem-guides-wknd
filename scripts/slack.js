@@ -395,9 +395,15 @@ function buildBackmergeReply() {
  */
 function buildSummaryReply() {
   const acm = process.env.ACM_RESULT || 'unknown';
+  const acmStatus = process.env.ACM_STATUS || acm;
+  const acmError = process.env.ACM_ERROR_MESSAGE || '';
   const jira = process.env.JIRA_RESULT || 'unknown';
   const prs = process.env.PRS_RESULT || 'unknown';
-  const allOk = acm === 'success' && jira === 'success' && prs === 'success';
+  
+  // Core workflow success = Jira + PRs succeeded (ACM is optional)
+  const coreSuccess = jira === 'success' && prs === 'success';
+  const acmFailed = acm !== 'success';
+  
   const threadTs = process.env.THREAD_TS;
 
   if (!threadTs) {
@@ -428,21 +434,25 @@ function buildSummaryReply() {
     ? `\n${untagged.map(ticket => `• ${ticket}`).join('\n')}`
     : ' None';
 
-  const failedSteps = [];
-  if (acm !== 'success') failedSteps.push(`• Adobe Cloud Manager: ${acm}`);
-  if (jira !== 'success') failedSteps.push(`• Jira updates: ${jira}`);
-  if (prs !== 'success') failedSteps.push(`• PR notifications: ${prs}`);
+  // Build ACM status section
+  const acmStatusText = acmFailed
+    ? `⚠️ *Adobe Cloud Manager* (Optional)\n• Status: Failed\n• ${acmError || 'Check workflow logs for details'}\n• Action: Update pipeline branch and trigger build manually in Cloud Manager`
+    : `✅ *Adobe Cloud Manager*\n• Pipeline branch updated to \`${newBranch}\`\n• Stage pipeline triggered successfully`;
 
-  const payload = allOk
+  const payload = coreSuccess
     ? {
         channel: CHANNEL_ID,
-        text: `:white_check_mark: Release Cut Completed: ${release}`,
+        text: acmFailed
+          ? `:white_check_mark: Release Cut Completed (ACM Warning): ${release}`
+          : `:white_check_mark: Release Cut Completed: ${release}`,
         blocks: [
           {
             type: 'header',
             text: {
               type: 'plain_text',
-              text: `:white_check_mark: Release Cut Completed: ${release}`,
+              text: acmFailed
+                ? `:white_check_mark: Release Cut Completed (ACM Warning): ${release}`
+                : `:white_check_mark: Release Cut Completed: ${release}`,
               emoji: true
             }
           },
@@ -455,7 +465,7 @@ function buildSummaryReply() {
               },
               {
                 type: 'mrkdwn',
-                text: `*Status*\nCompleted`
+                text: acmFailed ? `*Status*\nCompleted with ACM Warning` : `*Status*\nCompleted`
               },
               {
                 type: 'mrkdwn',
@@ -488,9 +498,23 @@ function buildSummaryReply() {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Execution Outcome*\n• Adobe Cloud Manager pipeline updated and triggered\n• Jira artifacts updated\n• Open pull requests notified'
+              text: acmStatusText
             }
           },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Core Workflow Status*\n✅ Jira artifacts updated\n✅ Open pull requests notified`
+            }
+          },
+          ...(acmFailed ? [{
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: ':information_source: *Note:* Adobe Cloud Manager is an optional step. The release cut completed successfully. Please update the pipeline manually in Cloud Manager.'
+            }
+          }] : []),
           {
             type: 'context',
             elements: [
@@ -504,13 +528,13 @@ function buildSummaryReply() {
       }
     : {
         channel: CHANNEL_ID,
-        text: `:warning: Release Cut Completed with Exceptions: ${release}`,
+        text: `:x: Release Cut Failed: ${release}`,
         blocks: [
           {
             type: 'header',
             text: {
               type: 'plain_text',
-              text: `:warning: Release Cut Completed with Exceptions: ${release}`,
+              text: `:x: Release Cut Failed: ${release}`,
               emoji: true
             }
           },
@@ -523,7 +547,7 @@ function buildSummaryReply() {
               },
               {
                 type: 'mrkdwn',
-                text: `*Status*\nExceptions Detected`
+                text: `*Status*\nFailed`
               },
               {
                 type: 'mrkdwn',
@@ -542,14 +566,24 @@ function buildSummaryReply() {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Exceptions*\n${failedSteps.join('\n') || '• Review workflow logs for details.'}`
+              text: `*Failed Steps*\n${[
+                jira !== 'success' ? `• Jira updates: ${jira}` : null,
+                prs !== 'success' ? `• PR notifications: ${prs}` : null
+              ].filter(Boolean).join('\n') || '• Review workflow logs for details.'}`
             }
           },
+          ...(acmFailed ? [{
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Adobe Cloud Manager* (Optional)\n⚠️ Also failed, but this is not blocking\n${acmError ? `• ${acmError}` : ''}`
+            }
+          }] : []),
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Required Follow-up*\n• Review workflow logs\n• Complete any failed operational steps manually if required\n• Re-run affected jobs or the workflow after remediation'
+              text: '*Required Follow-up*\n• Review workflow logs\n• Fix failed steps and re-run workflow\n• If only ACM failed, update Cloud Manager manually'
             }
           },
           {

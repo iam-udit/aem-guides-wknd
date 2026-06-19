@@ -579,14 +579,19 @@ jobs:
 
 # ============================================================
 # JOB 4 — Adobe Cloud Manager: update pipeline + trigger stage
+# (OPTIONAL - workflow continues on failure)
 # ============================================================
   adobe_cloud_manager:
-    name: "4 · Adobe Cloud Manager"
+    name: "4 · Adobe Cloud Manager (optional)"
     runs-on: ubuntu-latest
+    continue-on-error: true
     needs: [derive_release_metadata, rotate_tags]
     if: |
       !cancelled() &&
       needs.rotate_tags.result == 'success'
+    outputs:
+      status: ${{ steps.set_status.outputs.status }}
+      error_message: ${{ steps.set_status.outputs.error_message }}
 
     steps:
       - name: Get Adobe IMS access token
@@ -599,7 +604,27 @@ jobs:
             -d "client_id=${{ vars.ACM_CLIENT_ID }}" \
             -d "client_secret=${{ secrets.ACM_CLIENT_SECRET }}" \
             -d "scope=openid,AdobeID,read_organizations,additional_info.projectedProductContext")
-          TOKEN=$(echo "$RESPONSE" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).access_token))")
+          
+          TOKEN=$(echo "$RESPONSE" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+            try {
+              const parsed = JSON.parse(d);
+              if (parsed.access_token) {
+                console.log(parsed.access_token);
+              } else {
+                console.error('No access_token in response:', d);
+                process.exit(1);
+              }
+            } catch(e) {
+              console.error('Failed to parse IMS response:', d);
+              process.exit(1);
+            }
+          })")
+          
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Failed to obtain ACM access token"
+            exit 1
+          fi
+          
           echo "::add-mask::$TOKEN"
           echo "acm_token=$TOKEN" >> "$GITHUB_OUTPUT"
 
@@ -607,27 +632,46 @@ jobs:
         run: |
           [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would patch ACM pipeline branch" && exit 0
 
+          # Fetch current pipeline configuration
           PIPELINE=$(curl -s \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}")
 
+          # Update branch in BUILD phase
           UPDATED=$(echo "$PIPELINE" | node -e "
             let d=''; process.stdin.on('data',c=>d+=c).on('end',()=>{
-              const p = JSON.parse(d);
-              (p.phases||[]).forEach(ph=>{ if(ph.type==='BUILD') ph.branch='${{ env.NEW_RELEASE_BRANCH }}'; });
-              console.log(JSON.stringify(p));
+              try {
+                const p = JSON.parse(d);
+                if (!p.phases) {
+                  console.error('No phases found in pipeline config');
+                  process.exit(1);
+                }
+                p.phases.forEach(ph=>{ if(ph.type==='BUILD') ph.branch='${{ env.NEW_RELEASE_BRANCH }}'; });
+                console.log(JSON.stringify(p));
+              } catch(e) {
+                console.error('Failed to parse pipeline config:', e.message);
+                process.exit(1);
+              }
             })")
 
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+          # Use PATCH instead of PUT
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}" \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
             -H "Content-Type: application/json" \
             -d "$UPDATED")
 
           echo "Pipeline PATCH → HTTP $HTTP_CODE"
-          [ "$HTTP_CODE" = "200" ] && echo "✅ Pipeline branch updated" || echo "::warning::PATCH returned $HTTP_CODE — verify in Cloud Manager"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Pipeline branch updated to ${{ env.NEW_RELEASE_BRANCH }}"
+          else
+            echo "::error::PATCH returned $HTTP_CODE — pipeline branch update failed"
+            exit 1
+          fi
 
       - name: Trigger stage pipeline execution
         run: |
@@ -637,10 +681,30 @@ jobs:
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution" \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
             -H "Content-Type: application/json")
 
           echo "Pipeline trigger → HTTP $HTTP_CODE"
-          [ "$HTTP_CODE" = "201" ] && echo "✅ Stage pipeline triggered" || echo "::warning::Trigger returned $HTTP_CODE — verify manually in Cloud Manager"
+          if [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Stage pipeline triggered successfully"
+          else
+            echo "::error::Trigger returned $HTTP_CODE — pipeline execution failed to start"
+            exit 1
+          fi
+
+      - name: Set ACM job status
+        id: set_status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            echo "error_message=" >> "$GITHUB_OUTPUT"
+            echo "✅ ACM operations completed successfully"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "error_message=ACM operation failed - check logs for details. Update pipeline manually in Cloud Manager." >> "$GITHUB_OUTPUT"
+            echo "⚠️  ACM operations failed - workflow will continue"
+          fi
 
 
 # ============================================================
@@ -737,8 +801,7 @@ jobs:
     needs: [derive_release_metadata, jira_release, adobe_cloud_manager]
     if: |
       !cancelled() &&
-      needs.jira_release.result == 'success' &&
-      needs.adobe_cloud_manager.result == 'success'
+      needs.jira_release.result == 'success'
 
     steps:
       - name: Checkout
@@ -813,6 +876,8 @@ jobs:
           JIRA_BASE_URL:        ${{ vars.JIRA_BASE_URL }}
           UNTAGGED_TICKETS:     ${{ needs.jira_release.outputs.untagged_open_tickets }}
           ACM_RESULT:           ${{ needs.adobe_cloud_manager.result }}
+          ACM_STATUS:           ${{ needs.adobe_cloud_manager.outputs.status }}
+          ACM_ERROR_MESSAGE:    ${{ needs.adobe_cloud_manager.outputs.error_message }}
           JIRA_RESULT:          ${{ needs.jira_release.result }}
           PRS_RESULT:           ${{ needs.notify_open_prs.result }}
           GITHUB_ACTOR:         ${{ github.actor }}
