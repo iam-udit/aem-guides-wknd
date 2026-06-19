@@ -60,6 +60,7 @@ public class HelloWorldModel {
 
     /**
      * Test changes for the jira ticket: ADCMS-3
+     * Some more changes from loki
      */
     public String getMessage() {
         return message;
