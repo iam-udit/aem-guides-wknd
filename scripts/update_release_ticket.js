@@ -206,53 +206,57 @@ function buildDescription(releaseTickets) {
     marks: [{ type: 'link', attrs: { href } }],
   });
 
+  const heading = (level, t) => ({
+    type: 'heading',
+    attrs: { level },
+    content: [{ type: 'text', text: t }],
+  });
+
   const hardBreak = () => ({ type: 'hardBreak' });
 
-  // ── Release Filter line ──────────────────────────────────────────────────────
+  // ── Release Overview heading ─────────────────────────────────────────────────
+  const overviewHeading = heading(2, `Release ${NEW_LABEL}`);
+  
+  const overviewText = para(
+    text('This release includes '),
+    text(`${releaseTickets.length}`, [{ type: 'strong' }]),
+    text(` ticket${releaseTickets.length === 1 ? '' : 's'} that ${releaseTickets.length === 1 ? 'has' : 'have'} been merged and tagged with fix version `),
+    text(`"${NEW_LABEL}"`, [{ type: 'strong' }]),
+    text('.'),
+  );
+
+  // ── Release Filter section ───────────────────────────────────────────────────
+  const filterHeading = heading(3, 'Release Filter');
   const filterLine = para(
-    text('Release Filter: '),
-    link(filterURL, filterURL),
+    text('View all tickets in this release: '),
+    link(filterURL, 'Open Jira Filter'),
   );
 
   // ── Release Tickets section ──────────────────────────────────────────────────
-  // Each ticket on its own paragraph (matching the screenshot layout)
-  const ticketHeaderLine = para(text('Release Tickets:'));
+  const ticketHeading = heading(3, 'Release Tickets');
+  const ticketCount = para(
+    text(`Total: ${releaseTickets.length} ticket${releaseTickets.length === 1 ? '' : 's'}`)
+  );
 
   const ticketLines = releaseTickets.map(id => {
     const ticketURL = `${JIRA_BASE}/browse/${id}`;
-    return para(link(ticketURL, ticketURL));
+    return para(link(ticketURL, id));
   });
-
-  // ── Untagged open tickets warning (Rule 4) ───────────────────────────────────
-  const untaggedSection = [];
-  if (UNTAGGED_OPEN.length > 0) {
-    untaggedSection.push(para(
-      text('Tickets found in release branch but NOT tagged to fix version '),
-      text(`"${NEW_LABEL}"`, [{ type: 'strong' }]),
-      text(' - code is merged but fix version is missing. Please review:'),
-    ));
-    UNTAGGED_OPEN.forEach(id => {
-      const ticketURL = `${JIRA_BASE}/browse/${id}`;
-      untaggedSection.push(para(link(ticketURL, ticketURL)));
-    });
-  }
-
-  // ── Auto-generated footer note ───────────────────────────────────────────────
-  const footerLine = para(
-    text('_Auto-updated by Release Cut workflow. Verify the ticket list — cherry-picks or hotfixes without commit references may need manual addition._'),
-  );
 
   return {
     type:    'doc',
     version: 1,
     content: [
-      filterLine,
+      overviewHeading,
+      overviewText,
       para(text('')),           // blank line separator
-      ticketHeaderLine,
-      ...ticketLines,
-      ...(untaggedSection.length ? [para(text('')), ...untaggedSection] : []),
+      filterHeading,
+      filterLine,
       para(text('')),
-      footerLine,
+      ticketHeading,
+      ticketCount,
+      para(text('')),
+      ...ticketLines,
     ],
   };
 }

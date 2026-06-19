@@ -629,6 +629,7 @@ jobs:
           echo "acm_token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Patch pipeline branch to new release branch
+        id: patch_pipeline
         run: |
           [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would patch ACM pipeline branch" && exit 0
 
@@ -674,6 +675,7 @@ jobs:
           fi
 
       - name: Trigger stage pipeline execution
+        if: steps.patch_pipeline.outcome == 'success'
         run: |
           [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would trigger stage build" && exit 0
 
