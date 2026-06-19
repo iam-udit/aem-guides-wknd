@@ -13,20 +13,27 @@
  *   SLACK_BOT_TOKEN     Slack Bot User OAuth Token (xoxb-...)
  *   SLACK_CHANNEL_ID    Channel ID (e.g., C01234567)
  *   NOTIFICATION_TYPE   One of: start | backmerge | summary
- *   
+ *
  *   For 'start':
  *     NEW_VERSION_LABEL, GITHUB_ACTOR, RUN_NUMBER, RUN_URL
- *   
+ *
  *   For 'backmerge':
  *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, PR_BRANCH, PR_URL, ALREADY_MERGED,
  *     HAD_CONFLICT, CONFLICT_FILES (comma-separated), THREAD_TS (from start message)
- *   
+ *
  *   For 'summary':
  *     NEW_VERSION_LABEL, NEW_RELEASE_BRANCH, NEW_PRERELEASE_TAG,
  *     PREV_LATEST_TAG, PREV_RELEASE_BRANCH, TICKET_COUNT, FILTER_URL,
- *     JIRA_RELEASE_TICKET, UNTAGGED_TICKETS, ACM_RESULT, JIRA_RESULT,
- *     PRS_RESULT, GITHUB_ACTOR, RUN_NUMBER, RUN_URL, WORKFLOW_DURATION,
- *     THREAD_TS (from start message)
+ *     JIRA_RELEASE_TICKET, JIRA_BASE_URL, UNTAGGED_TICKETS, ACM_RESULT,
+ *     JIRA_RESULT, PRS_RESULT, GITHUB_ACTOR, RUN_NUMBER, RUN_URL,
+ *     WORKFLOW_DURATION, THREAD_TS (from start message)
+ *
+ * ACM_RESULT note:
+ *   ACM is an optional step — if it fails or is skipped the workflow still
+ *   completes. The summary distinguishes between:
+ *     'success'          → pipeline updated and triggered ✅
+ *     'failure'          → pipeline step failed ⚠️ (manual action needed)
+ *     'cancelled/skipped'→ pipeline step was skipped ℹ️
  */
 
 const https = require('https');
@@ -34,10 +41,6 @@ const fs    = require('fs');
 
 /**
  * Reads and validates a required environment variable.
- *
- * @param {string} name Environment variable name.
- * @returns {string} Trimmed environment variable value.
- * @throws {Error} Thrown when the variable is missing or blank.
  */
 function requireEnv(name) {
   const value = process.env[name];
@@ -53,9 +56,6 @@ const TYPE       = requireEnv('NOTIFICATION_TYPE');
 
 /**
  * Sends a message payload to Slack using chat.postMessage.
- *
- * @param {object} payload Slack message payload.
- * @returns {Promise<object>} Parsed Slack API response.
  */
 function postToSlack(payload) {
   return new Promise((resolve, reject) => {
@@ -96,14 +96,12 @@ function postToSlack(payload) {
 
 /**
  * Builds the root Slack thread message posted when the workflow starts.
- *
- * @returns {object} Slack message payload for the workflow start notification.
  */
 function buildStartMessage() {
-  const runUrl = process.env.RUN_URL || '';
-  const actor = process.env.GITHUB_ACTOR || 'unknown';
-  const runNumber = process.env.RUN_NUMBER || '?';
-  const release = process.env.NEW_VERSION_LABEL || '';
+  const runUrl    = process.env.RUN_URL    || '';
+  const actor     = process.env.GITHUB_ACTOR || 'unknown';
+  const runNumber = process.env.RUN_NUMBER  || '?';
+  const release   = process.env.NEW_VERSION_LABEL || '';
 
   return {
     channel: CHANNEL_ID,
@@ -111,31 +109,15 @@ function buildStartMessage() {
     blocks: [
       {
         type: 'header',
-        text: {
-          type: 'plain_text',
-          text: `:rocket: Release Cut Started: ${release}`,
-          emoji: true
-        }
+        text: { type: 'plain_text', text: `:rocket: Release Cut Started: ${release}`, emoji: true }
       },
       {
         type: 'section',
         fields: [
-          {
-            type: 'mrkdwn',
-            text: `*Release*\n${release}`
-          },
-          {
-            type: 'mrkdwn',
-            text: `*Status*\nIn Progress`
-          },
-          {
-            type: 'mrkdwn',
-            text: `*Workflow Run*\n#${runNumber}`
-          },
-          {
-            type: 'mrkdwn',
-            text: `*Triggered By*\n@${actor}`
-          }
+          { type: 'mrkdwn', text: `*Release*\n${release}` },
+          { type: 'mrkdwn', text: `*Status*\nIn Progress` },
+          { type: 'mrkdwn', text: `*Workflow Run*\n#${runNumber}` },
+          { type: 'mrkdwn', text: `*Triggered By*\n@${actor}` },
         ]
       },
       {
@@ -148,15 +130,7 @@ function buildStartMessage() {
       {
         type: 'actions',
         elements: [
-          {
-            type: 'button',
-            text: {
-              type: 'plain_text',
-              text: 'View Workflow',
-              emoji: false
-            },
-            url: runUrl
-          }
+          { type: 'button', text: { type: 'plain_text', text: 'View Workflow', emoji: false }, url: runUrl }
         ]
       }
     ]
@@ -165,63 +139,42 @@ function buildStartMessage() {
 
 /**
  * Builds the threaded Slack reply for the back-merge stage.
- *
- * @returns {object} Slack message payload describing clean merge or conflict status.
  */
 function buildBackmergeReply() {
   const alreadyMerged = process.env.ALREADY_MERGED === 'true';
-  const hadConflict = process.env.HAD_CONFLICT === 'true';
-  const prUrl = process.env.PR_URL || '';
-  const prevBranch = process.env.PREV_RELEASE_BRANCH || '';
-  const prBranch = process.env.PR_BRANCH || '';
-  const threadTs = process.env.THREAD_TS;
+  const hadConflict   = process.env.HAD_CONFLICT   === 'true';
+  const prUrl         = process.env.PR_URL          || '';
+  const prevBranch    = process.env.PREV_RELEASE_BRANCH || '';
+  const prBranch      = process.env.PR_BRANCH       || '';
+  const threadTs      = process.env.THREAD_TS;
+  const runUrl        = process.env.RUN_URL          || '';
 
-  if (!threadTs) {
-    console.log('[Slack] THREAD_TS not provided, posting as standalone message');
-  }
+  if (!threadTs) console.log('[Slack] THREAD_TS not provided, posting as standalone message');
 
-  // Handle "already merged" scenario - branches are in sync
+  // Already in sync — manual back-merge was done, needs approval
   if (alreadyMerged) {
-    const runUrl = process.env.RUN_URL || '';
-    
     const payload = {
       channel: CHANNEL_ID,
       text: ':white_check_mark: Back-merge Not Required (Already in Sync) - Approval Needed',
       blocks: [
         {
           type: 'header',
-          text: {
-            type: 'plain_text',
-            text: ':white_check_mark: Back-merge Not Required (Already in Sync)',
-            emoji: true
-          }
+          text: { type: 'plain_text', text: ':white_check_mark: Back-merge Not Required (Already in Sync)', emoji: true }
         },
         {
           type: 'section',
           fields: [
-            {
-              type: 'mrkdwn',
-              text: '*Stage*\nBack-merge'
-            },
-            {
-              type: 'mrkdwn',
-              text: '*Status*\nAwaiting Approval'
-            }
+            { type: 'mrkdwn', text: '*Stage*\nBack-merge' },
+            { type: 'mrkdwn', text: '*Status*\nAwaiting Approval' },
           ]
         },
         {
           type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*Scope*\nPrevious release branch \`${prevBranch}\` is already merged into \`develop\`.`
-          }
+          text: { type: 'mrkdwn', text: `*Scope*\nPrevious release branch \`${prevBranch}\` is already merged into \`develop\`.` }
         },
         {
           type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: '*Result*\nNo changes detected between branches — back-merge was likely completed manually.'
-          }
+          text: { type: 'mrkdwn', text: '*Result*\nNo changes detected between branches — back-merge was likely completed manually.' }
         },
         {
           type: 'section',
@@ -233,28 +186,16 @@ function buildBackmergeReply() {
         {
           type: 'actions',
           elements: [
-            {
-              type: 'button',
-              text: {
-                type: 'plain_text',
-                text: 'Review & Approve Workflow',
-                emoji: false
-              },
-              url: runUrl,
-              style: 'primary'
-            }
+            { type: 'button', text: { type: 'plain_text', text: 'Review & Approve Workflow', emoji: false }, url: runUrl, style: 'primary' }
           ]
         }
       ]
     };
-
-    if (threadTs) {
-      payload.thread_ts = threadTs;
-    }
-
+    if (threadTs) payload.thread_ts = threadTs;
     return payload;
   }
 
+  // Conflict or clean merge — always raises a PR
   const payload = hadConflict
     ? {
         channel: CHANNEL_ID,
@@ -262,42 +203,26 @@ function buildBackmergeReply() {
         blocks: [
           {
             type: 'header',
-            text: {
-              type: 'plain_text',
-              text: ':warning: Back-merge PR Raised (Merge Conflicts)',
-              emoji: true
-            }
+            text: { type: 'plain_text', text: ':warning: Back-merge PR Raised (Merge Conflicts)', emoji: true }
           },
           {
             type: 'section',
             fields: [
-              {
-                type: 'mrkdwn',
-                text: '*Stage*\nBack-merge'
-              },
-              {
-                type: 'mrkdwn',
-                text: '*Status*\nConflicts Require Action'
-              }
+              { type: 'mrkdwn', text: '*Stage*\nBack-merge' },
+              { type: 'mrkdwn', text: '*Status*\nConflicts Require Action' },
             ]
           },
           {
             type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Scope*\nPrevious release branch \`${prevBranch}\` is being merged into \`develop\`.`
-            }
+            text: { type: 'mrkdwn', text: `*Scope*\nPrevious release branch \`${prevBranch}\` is being merged into \`develop\`.` }
           },
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
               text: `*Conflicting Files*\n${(process.env.CONFLICT_FILES || '')
-                .split(',')
-                .map(f => f.trim())
-                .filter(Boolean)
-                .map(f => `• \`${f}\``)
-                .join('\n') || '• Review the pull request for file-level details.'}`
+                .split(',').map(f => f.trim()).filter(Boolean)
+                .map(f => `• \`${f}\``).join('\n') || '• Review the pull request for file-level details.'}`
             }
           },
           {
@@ -310,16 +235,7 @@ function buildBackmergeReply() {
           {
             type: 'actions',
             elements: [
-              {
-                type: 'button',
-                text: {
-                  type: 'plain_text',
-                  text: 'Open Pull Request',
-                  emoji: false
-                },
-                url: prUrl,
-                style: 'danger'
-              }
+              { type: 'button', text: { type: 'plain_text', text: 'Open Pull Request', emoji: false }, url: prUrl, style: 'danger' }
             ]
           }
         ]
@@ -330,31 +246,18 @@ function buildBackmergeReply() {
         blocks: [
           {
             type: 'header',
-            text: {
-              type: 'plain_text',
-              text: ':white_check_mark: Back-merge PR Raised (No Conflicts)',
-              emoji: true
-            }
+            text: { type: 'plain_text', text: ':white_check_mark: Back-merge PR Raised (No Conflicts)', emoji: true }
           },
           {
             type: 'section',
             fields: [
-              {
-                type: 'mrkdwn',
-                text: '*Stage*\nBack-merge'
-              },
-              {
-                type: 'mrkdwn',
-                text: '*Status*\nReady for Review'
-              }
+              { type: 'mrkdwn', text: '*Stage*\nBack-merge' },
+              { type: 'mrkdwn', text: '*Status*\nReady for Review' },
             ]
           },
           {
             type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Scope*\nPrevious release branch \`${prevBranch}\` has been merged into the back-merge PR targeting \`develop\`.`
-            }
+            text: { type: 'mrkdwn', text: `*Scope*\nPrevious release branch \`${prevBranch}\` has been merged into the back-merge PR targeting \`develop\`.` }
           },
           {
             type: 'section',
@@ -366,215 +269,156 @@ function buildBackmergeReply() {
           {
             type: 'actions',
             elements: [
-              {
-                type: 'button',
-                text: {
-                  type: 'plain_text',
-                  text: 'Open Pull Request',
-                  emoji: false
-                },
-                url: prUrl,
-                style: 'primary'
-              }
+              { type: 'button', text: { type: 'plain_text', text: 'Open Pull Request', emoji: false }, url: prUrl, style: 'primary' }
             ]
           }
         ]
       };
 
-  if (threadTs) {
-    payload.thread_ts = threadTs;
-  }
-
+  if (threadTs) payload.thread_ts = threadTs;
   return payload;
+}
+
+/**
+ * Returns a human-readable status line for the ACM step.
+ * ACM is optional — failure is a warning, not a blocker.
+ *
+ * @param {string} acmResult  Value of ACM_RESULT env var.
+ * @returns {string} Formatted status string for the Slack block.
+ */
+function formatAcmStatus(acmResult) {
+  switch (acmResult) {
+    case 'success':
+      return '✅ Pipeline updated and stage build triggered';
+    case 'failure':
+      return '⚠️ One or more ACM steps failed — verify in Cloud Manager and trigger manually if needed';
+    case 'cancelled':
+      return 'ℹ️ ACM step was cancelled';
+    case 'skipped':
+      return 'ℹ️ ACM step was skipped';
+    default:
+      return `ℹ️ ACM result: ${acmResult} — check workflow logs`;
+  }
 }
 
 /**
  * Builds the threaded Slack summary message for workflow completion.
- *
- * @returns {object} Slack message payload for success or failure summary.
+ * ACM failure is shown as a warning note, not as a blocking exception.
  */
 function buildSummaryReply() {
-  const acm = process.env.ACM_RESULT || 'unknown';
+  const acm  = process.env.ACM_RESULT  || 'unknown';
   const jira = process.env.JIRA_RESULT || 'unknown';
-  const prs = process.env.PRS_RESULT || 'unknown';
-  const allOk = acm === 'success' && jira === 'success' && prs === 'success';
+  const prs  = process.env.PRS_RESULT  || 'unknown';
   const threadTs = process.env.THREAD_TS;
 
-  if (!threadTs) {
-    console.log('[Slack] THREAD_TS not provided, posting as standalone message');
-  }
+  if (!threadTs) console.log('[Slack] THREAD_TS not provided, posting as standalone message');
 
-  const release = process.env.NEW_VERSION_LABEL || '';
-  const newBranch = process.env.NEW_RELEASE_BRANCH || '';
-  const newTag = process.env.NEW_PRERELEASE_TAG || '';
-  const prevTag = process.env.PREV_LATEST_TAG || '';
-  const prevBranch = process.env.PREV_RELEASE_BRANCH || '';
-  const ticketCount = process.env.TICKET_COUNT || '0';
-  const filterUrl = process.env.FILTER_URL || '';
-  const releaseTicket = process.env.JIRA_RELEASE_TICKET || '';
-  const jiraBase = process.env.JIRA_BASE_URL || '';
+  // Overall success excludes ACM — Jira and PR notifications are the critical steps
+  // ACM failure is surfaced as a warning in the summary, not as a workflow failure
+  const coreOk = jira === 'success' && prs === 'success';
+  const acmOk  = acm  === 'success';
+
+  const release         = process.env.NEW_VERSION_LABEL   || '';
+  const newBranch       = process.env.NEW_RELEASE_BRANCH  || '';
+  const newTag          = process.env.NEW_PRERELEASE_TAG   || '';
+  const prevTag         = process.env.PREV_LATEST_TAG      || '';
+  const prevBranch      = process.env.PREV_RELEASE_BRANCH  || '';
+  const ticketCount     = process.env.TICKET_COUNT         || '0';
+  const filterUrl       = process.env.FILTER_URL           || '';
+  const releaseTicket   = process.env.JIRA_RELEASE_TICKET  || '';
+  const jiraBase        = process.env.JIRA_BASE_URL        || '';
   const releaseTicketUrl = jiraBase && releaseTicket ? `${jiraBase}/browse/${releaseTicket}` : '';
-  const duration = process.env.WORKFLOW_DURATION || 'N/A';
-  const runUrl = process.env.RUN_URL || '';
-  const actor = process.env.GITHUB_ACTOR || 'unknown';
-  const runNumber = process.env.RUN_NUMBER || '?';
+  const duration        = process.env.WORKFLOW_DURATION    || 'N/A';
+  const runUrl          = process.env.RUN_URL              || '';
+  const actor           = process.env.GITHUB_ACTOR         || 'unknown';
+  const runNumber       = process.env.RUN_NUMBER           || '?';
 
   const untagged = (process.env.UNTAGGED_TICKETS || '')
-    .split(',')
-    .map(t => t.trim())
-    .filter(Boolean);
-
+    .split(',').map(t => t.trim()).filter(Boolean);
   const untaggedText = untagged.length > 0
-    ? `\n${untagged.map(ticket => `• ${ticket}`).join('\n')}`
+    ? `\n${untagged.map(t => `• ${t}`).join('\n')}`
     : ' None';
 
-  const failedSteps = [];
-  if (acm !== 'success') failedSteps.push(`• Adobe Cloud Manager: ${acm}`);
-  if (jira !== 'success') failedSteps.push(`• Jira updates: ${jira}`);
-  if (prs !== 'success') failedSteps.push(`• PR notifications: ${prs}`);
+  // Collect only core failures (not ACM)
+  const coreFailures = [];
+  if (jira !== 'success') coreFailures.push(`• Jira updates: ${jira}`);
+  if (prs  !== 'success') coreFailures.push(`• PR notifications: ${prs}`);
 
-  const payload = allOk
-    ? {
-        channel: CHANNEL_ID,
-        text: `:white_check_mark: Release Cut Completed: ${release}`,
-        blocks: [
-          {
-            type: 'header',
-            text: {
-              type: 'plain_text',
-              text: `:white_check_mark: Release Cut Completed: ${release}`,
-              emoji: true
-            }
-          },
-          {
-            type: 'section',
-            fields: [
-              {
-                type: 'mrkdwn',
-                text: `*Release*\n${release}`
-              },
-              {
-                type: 'mrkdwn',
-                text: `*Status*\nCompleted`
-              },
-              {
-                type: 'mrkdwn',
-                text: `*Duration*\n${duration}`
-              },
-              {
-                type: 'mrkdwn',
-                text: `*Workflow Run*\n#${runNumber}`
-              }
-            ]
-          },
-          {
-            type: 'divider'
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Release Artifacts*\n• New release branch: \`${newBranch}\`\n• New pre-release tag: \`${newTag}\`\n• Previous latest tag: \`${prevTag}\` on \`${prevBranch}\``
-            }
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Jira Outcome*\n• Confirmed tickets: ${ticketCount}\n• Untagged tickets requiring review:\n${untaggedText}\n• Filter: <${filterUrl}|Open filter>\n• Release ticket: <${releaseTicketUrl}|${releaseTicket}>`
-            }
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: '*Execution Outcome*\n• Adobe Cloud Manager pipeline updated and triggered\n• Jira artifacts updated\n• Open pull requests notified'
-            }
-          },
-          {
-            type: 'context',
-            elements: [
-              {
-                type: 'mrkdwn',
-                text: `Triggered by @${actor} • <${runUrl}|View workflow>`
-              }
-            ]
-          }
-        ]
+  // Header and status depend only on core steps
+  const headerText = coreOk
+    ? (acmOk
+        ? `:white_check_mark: Release Cut Completed: ${release}`
+        : `:large_yellow_circle: Release Cut Completed (ACM Warning): ${release}`)
+    : `:warning: Release Cut Completed with Exceptions: ${release}`;
+
+  const statusText = coreOk
+    ? (acmOk ? 'Completed' : 'Completed — ACM Needs Attention')
+    : 'Exceptions Detected';
+
+  const blocks = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: headerText, emoji: true }
+    },
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Release*\n${release}` },
+        { type: 'mrkdwn', text: `*Status*\n${statusText}` },
+        { type: 'mrkdwn', text: `*Duration*\n${duration}` },
+        { type: 'mrkdwn', text: `*Workflow Run*\n#${runNumber}` },
+      ]
+    },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Release Artifacts*\n• New release branch: \`${newBranch}\`\n• New pre-release tag: \`${newTag}\`\n• Previous latest tag: \`${prevTag}\` on \`${prevBranch}\``
       }
-    : {
-        channel: CHANNEL_ID,
-        text: `:warning: Release Cut Completed with Exceptions: ${release}`,
-        blocks: [
-          {
-            type: 'header',
-            text: {
-              type: 'plain_text',
-              text: `:warning: Release Cut Completed with Exceptions: ${release}`,
-              emoji: true
-            }
-          },
-          {
-            type: 'section',
-            fields: [
-              {
-                type: 'mrkdwn',
-                text: `*Release*\n${release}`
-              },
-              {
-                type: 'mrkdwn',
-                text: `*Status*\nExceptions Detected`
-              },
-              {
-                type: 'mrkdwn',
-                text: `*Duration*\n${duration}`
-              },
-              {
-                type: 'mrkdwn',
-                text: `*Workflow Run*\n#${runNumber}`
-              }
-            ]
-          },
-          {
-            type: 'divider'
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Exceptions*\n${failedSteps.join('\n') || '• Review workflow logs for details.'}`
-            }
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: '*Required Follow-up*\n• Review workflow logs\n• Complete any failed operational steps manually if required\n• Re-run affected jobs or the workflow after remediation'
-            }
-          },
-          {
-            type: 'context',
-            elements: [
-              {
-                type: 'mrkdwn',
-                text: `Triggered by @${actor} • <${runUrl}|View workflow logs>`
-              }
-            ]
-          }
-        ]
-      };
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Jira Outcome*\n• Confirmed tickets: ${ticketCount}\n• Untagged tickets requiring review:${untaggedText}\n• Filter: <${filterUrl}|Open filter>\n• Release ticket: <${releaseTicketUrl}|${releaseTicket}>`
+      }
+    },
+    {
+      // ACM shown separately — optional step, warning only if failed
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Adobe Cloud Manager*\n${formatAcmStatus(acm)}`
+      }
+    },
+  ];
 
-  if (threadTs) {
-    payload.thread_ts = threadTs;
+  // Only add exceptions block if core steps failed
+  if (!coreOk) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Exceptions (action required)*\n${coreFailures.join('\n') || '• Review workflow logs for details.'}\n\n*Required Follow-up*\n• Review workflow logs\n• Complete any failed steps manually\n• Re-run affected jobs after remediation`
+      }
+    });
   }
 
+  blocks.push({
+    type: 'context',
+    elements: [
+      { type: 'mrkdwn', text: `Triggered by @${actor} • <${runUrl}|View workflow>` }
+    ]
+  });
+
+  const payload = { channel: CHANNEL_ID, text: headerText, blocks };
+  if (threadTs) payload.thread_ts = threadTs;
   return payload;
 }
 
 /**
- * Selects the requested notification type, posts it to Slack, and exports thread metadata.
- *
- * @returns {Promise<void>} Resolves when the Slack notification has been sent.
+ * Entry point — selects notification type, posts to Slack, saves thread ts.
  */
 async function main() {
   let payload;
@@ -582,15 +426,15 @@ async function main() {
 
   switch (TYPE) {
     case 'start':
-      payload = buildStartMessage();
+      payload     = buildStartMessage();
       messageType = 'start (main thread)';
       break;
     case 'backmerge':
-      payload = buildBackmergeReply();
+      payload     = buildBackmergeReply();
       messageType = 'back-merge (thread reply)';
       break;
     case 'summary':
-      payload = buildSummaryReply();
+      payload     = buildSummaryReply();
       messageType = 'summary (thread reply)';
       break;
     default:
@@ -602,7 +446,7 @@ async function main() {
   const response = await postToSlack(payload);
   console.log(`[Slack] Notification sent successfully`);
 
-  // For start message, save the thread timestamp for later replies
+  // Save thread timestamp for subsequent replies
   if (TYPE === 'start' && response.ts) {
     const outputFile = process.env.GITHUB_OUTPUT;
     if (outputFile) {
