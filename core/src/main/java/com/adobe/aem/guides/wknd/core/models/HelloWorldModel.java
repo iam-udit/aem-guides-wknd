@@ -63,7 +63,7 @@ public class HelloWorldModel {
 
     /**
      * Test changes for the jira ticket: ADCMS-3
-     * Some changes from develop to have merge conflict case
+     * Some more changes from loki
      */
     public String getMessage() {
         return message;
