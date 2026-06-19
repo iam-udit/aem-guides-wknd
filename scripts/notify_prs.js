@@ -213,6 +213,32 @@ async function checkTicketFixVersion(ticketId) {
 }
 
 /**
+ * Checks if a release cut comment already exists on a pull request.
+ *
+ * @param {number} prNumber Pull request number to check.
+ * @returns {Promise<boolean>} True if a comment for this release already exists.
+ */
+async function hasExistingComment(prNumber) {
+  try {
+    const comments = await ghRequest('GET', `/repos/${REPO}/issues/${prNumber}/comments`);
+    
+    // Check if any comment contains the release label and is from the bot
+    const botComment = comments.find(comment => {
+      const body = comment.body || '';
+      const isBot = comment.user?.login === 'github-actions[bot]' ||
+                    comment.user?.type === 'Bot';
+      const mentionsRelease = body.includes(NEW_LABEL) || body.includes(NEW_BRANCH);
+      return isBot && mentionsRelease;
+    });
+    
+    return !!botComment;
+  } catch (err) {
+    console.warn(`    Warning: Could not fetch comments: ${err.message}`);
+    return false; // If we can't check, allow posting to be safe
+  }
+}
+
+/**
  * Builds a targeted PR comment for pull requests whose Jira tickets match the release.
  *
  * @param {string} author GitHub login of the pull request author.
@@ -276,12 +302,21 @@ async function main() {
 
   let targetedComments = 0;
   let genericComments = 0;
+  let skippedComments = 0;
 
   for (const pr of prs) {
     const { number, title, body, user } = pr;
     const author = user?.login || 'unknown';
     
     console.log(`\n  PR #${number} - "${title}" (@${author})`);
+    
+    // Check if comment already exists for this release
+    const alreadyCommented = await hasExistingComment(number);
+    if (alreadyCommented) {
+      console.log(`    ⏭️  Skipping - comment for ${NEW_LABEL} already exists`);
+      skippedComments++;
+      continue;
+    }
     
     // Extract ticket IDs from PR
     const ticketIds = extractTicketIds(title, body);
@@ -348,6 +383,7 @@ async function main() {
   console.log(`[PR Notify] Completed`);
   console.log(`  Targeted comments: ${targetedComments} PR(s) (tickets match release)`);
   console.log(`  Generic comments:  ${genericComments} PR(s) (no matching tickets)`);
+  console.log(`  Skipped:           ${skippedComments} PR(s) (already commented)`);
   console.log(`  Total notified:    ${targetedComments + genericComments} PR(s)`);
   console.log(`========================================\n`);
 }
