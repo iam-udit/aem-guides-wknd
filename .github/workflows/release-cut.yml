@@ -485,6 +485,14 @@ jobs:
       (needs.approve_already_merged.result == 'success' || needs.await_pr_merge.result == 'success')
 
     steps:
+      - name: Debug job conditions
+        run: |
+          echo "=== Job Condition Debug ==="
+          echo "derive_release_metadata result: ${{ needs.derive_release_metadata.result }}"
+          echo "approve_already_merged result: ${{ needs.approve_already_merged.result }}"
+          echo "await_pr_merge result: ${{ needs.await_pr_merge.result }}"
+          echo "=========================="
+
       - name: Checkout develop
         uses: actions/checkout@v5
         with:
