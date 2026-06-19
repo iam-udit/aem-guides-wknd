@@ -257,7 +257,7 @@ jobs:
           HAS_CONFLICT="${{ steps.merge.outputs.had_conflict }}"
 
           if [ "$HAS_CONFLICT" = "true" ]; then
-            TITLE="chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} ⚠️ CONFLICTS"
+            TITLE="chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} → develop"
             BODY="## ⚠️ Merge Conflicts — Action Required
 
           Back-merging \`${{ env.PREV_RELEASE_BRANCH }}\` into \`develop\` produced conflicts.
@@ -270,12 +270,12 @@ jobs:
           2. Resolve all conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`)
           3. Commit the resolution and push
           4. Approve and merge this PR into \`develop\`
-          5. Then trigger **\`release-cut-continue.yml\`** manually with the same inputs
+          5. Workflow execution will continue automatically after merge
 
           > Auto-created by Release Cut workflow run #${{ github.run_number }}"
           else
-            TITLE="chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} → develop ✅"
-            BODY="## Clean back-merge
+            TITLE="chore(release): back-merge ${{ env.PREV_RELEASE_BRANCH }} → develop"
+            BODY="## ✅ Clean back-merge
 
           Automated back-merge of \`${{ env.PREV_RELEASE_BRANCH }}\` into \`develop\`.
           No conflicts detected — ready to merge.
@@ -301,6 +301,7 @@ jobs:
           NOTIFICATION_TYPE:    backmerge
           NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
           PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
+          PR_BRANCH:            ${{ steps.merge.outputs.pr_branch }}
           PR_URL:               ${{ steps.create_pr.outputs.pr_url }}
           HAD_CONFLICT:         ${{ steps.merge.outputs.had_conflict }}
           CONFLICT_FILES:       ${{ steps.merge.outputs.conflict_files }}

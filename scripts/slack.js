@@ -18,7 +18,7 @@
  *     NEW_VERSION_LABEL, GITHUB_ACTOR, RUN_NUMBER, RUN_URL
  *   
  *   For 'backmerge':
- *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, PR_URL, HAD_CONFLICT, 
+ *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, PR_BRANCH, PR_URL, HAD_CONFLICT,
  *     CONFLICT_FILES (comma-separated), THREAD_TS (from start message)
  *   
  *   For 'summary':
@@ -172,6 +172,7 @@ function buildBackmergeReply() {
   const hadConflict = process.env.HAD_CONFLICT === 'true';
   const prUrl = process.env.PR_URL || '';
   const prevBranch = process.env.PREV_RELEASE_BRANCH || '';
+  const prBranch = process.env.PR_BRANCH || '';
   const threadTs = process.env.THREAD_TS;
 
   if (!threadTs) {
@@ -181,13 +182,13 @@ function buildBackmergeReply() {
   const payload = hadConflict
     ? {
         channel: CHANNEL_ID,
-        text: ':warning: Back-merge Requires Action (Conflicts)',
+        text: ':warning: Back-merge PR Raised (Merge Conflicts)',
         blocks: [
           {
             type: 'header',
             text: {
               type: 'plain_text',
-              text: ':warning: Back-merge Requires Action (Conflicts)',
+              text: ':warning: Back-merge PR Raised (Merge Conflicts)',
               emoji: true
             }
           },
@@ -227,7 +228,7 @@ function buildBackmergeReply() {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Required Action*\n• Check out the back-merge branch\n• Resolve all merge conflicts\n• Commit and push the resolution\n• Merge the pull request into `develop`\n• Workflow execution will continue automatically after merge'
+              text: `*Required Action*\n• Check out the back-merge branch${prBranch ? ` \`${prBranch}\`` : ''}\n• Resolve all merge conflicts\n• Commit and push the resolution\n• Merge the pull request into \`develop\`\n• Workflow execution will continue automatically after merge`
             }
           },
           {
@@ -261,16 +262,29 @@ function buildBackmergeReply() {
           },
           {
             type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: '*Stage*\nBack-merge'
+              },
+              {
+                type: 'mrkdwn',
+                text: '*Status*\nReady for Review'
+              }
+            ]
+          },
+          {
+            type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `Back-merge PR created: \`${prevBranch}\` → \`develop\``
+              text: `*Scope*\nPrevious release branch \`${prevBranch}\` has been merged into the back-merge PR targeting \`develop\`.`
             }
           },
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Action Required:*\n• Review and merge the PR into `develop`\n• Workflow will automatically continue once merged'
+              text: `*Required Action*\n• Check out the back-merge branch${prBranch ? ` \`${prBranch}\`` : ''}\n• Review and merge the pull request into \`develop\`\n• Workflow execution will continue automatically after merge`
             }
           },
           {
