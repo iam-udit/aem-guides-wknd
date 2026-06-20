@@ -470,13 +470,14 @@ function buildSummaryReply() {
   const acm = process.env.ACM_RESULT || 'unknown';
   const acmStatus = process.env.ACM_STATUS || acm;
   const acmError = process.env.ACM_ERROR_MESSAGE || '';
+  const backMerge = process.env.BACK_MERGE_RESULT || 'unknown';
+  const approval = process.env.APPROVAL_RESULT || 'unknown';
+  const awaitPr = process.env.AWAIT_PR_RESULT || 'unknown';
+  const cutBranch = process.env.CUT_BRANCH_RESULT || 'unknown';
+  const rotateTags = process.env.ROTATE_TAGS_RESULT || 'unknown';
   const jira = process.env.JIRA_RESULT || 'unknown';
   const prs = process.env.PRS_RESULT || 'unknown';
-  
-  // Core workflow success = Jira + PRs succeeded (ACM is optional)
-  const coreSuccess = jira === 'success' && prs === 'success';
-  const acmFailed = acm !== 'success';
-  
+
   const threadTs = process.env.THREAD_TS;
 
   if (!threadTs) {
@@ -507,9 +508,77 @@ function buildSummaryReply() {
     ? `\n${untagged.map(ticket => `• ${ticket}`).join('\n')}`
     : ' None';
 
-  // Build ACM status section
+  function isFailureLike(result) {
+    return ['failure', 'cancelled', 'timed_out', 'action_required'].includes(result);
+  }
+
+  function describeResult(result, successText, failureText, cancelledText, skippedText) {
+    if (result === 'success') return successText;
+    if (result === 'cancelled') return cancelledText;
+    if (result === 'skipped') return skippedText;
+    return failureText;
+  }
+
+  function buildFailureReasons() {
+    const reasons = [];
+
+    if (backMerge === 'failure') {
+      reasons.push('• Back-merge setup failed before the release branch could be cut');
+    }
+
+    if (approval === 'cancelled') {
+      reasons.push('• Manual approval for the already-merged back-merge path was cancelled');
+    } else if (approval === 'failure') {
+      reasons.push('• Manual approval for the already-merged back-merge path failed');
+    }
+
+    if (awaitPr === 'cancelled') {
+      reasons.push('• Waiting for the back-merge PR was cancelled before the PR was merged');
+    } else if (awaitPr === 'failure') {
+      reasons.push('• Back-merge PR was not merged successfully or timed out while waiting');
+    }
+
+    if (cutBranch === 'cancelled') {
+      reasons.push('• Release branch creation was cancelled');
+    } else if (cutBranch === 'failure') {
+      reasons.push('• Failed to create or push the new release branch');
+    } else if (cutBranch === 'skipped' && (isFailureLike(approval) || isFailureLike(awaitPr) || backMerge === 'failure')) {
+      reasons.push('• Release branch creation was skipped because the back-merge path did not complete successfully');
+    }
+
+    if (rotateTags === 'cancelled') {
+      reasons.push('• Tag rotation was cancelled');
+    } else if (rotateTags === 'failure') {
+      reasons.push('• Failed while rotating release tags');
+    } else if (rotateTags === 'skipped' && isFailureLike(cutBranch)) {
+      reasons.push('• Tag rotation was skipped because the release branch was not created successfully');
+    }
+
+    if (jira === 'cancelled') {
+      reasons.push('• Jira release updates were cancelled');
+    } else if (jira === 'failure') {
+      reasons.push('• Jira release updates failed');
+    } else if (jira === 'skipped' && isFailureLike(rotateTags)) {
+      reasons.push('• Jira release updates were skipped because tag rotation did not complete successfully');
+    }
+
+    if (prs === 'cancelled') {
+      reasons.push('• Open PR notifications were cancelled');
+    } else if (prs === 'failure') {
+      reasons.push('• Open PR notifications failed');
+    } else if (prs === 'skipped' && isFailureLike(jira)) {
+      reasons.push('• Open PR notifications were skipped because Jira release updates did not complete successfully');
+    }
+
+    return reasons;
+  }
+
+  const coreSuccess = jira === 'success' && prs === 'success';
+  const acmFailed = acmStatus !== 'success';
+  const failureReasons = buildFailureReasons();
+
   const acmStatusText = acmFailed
-    ? `*Adobe Cloud Manager* (Optional)\n• Status: Failed\n• ${acmError || 'Check workflow logs for details'}\n• Action: Update pipeline branch and trigger build manually in Cloud Manager`
+    ? `*Adobe Cloud Manager* (Optional)\n• Status: ${describeResult(acmStatus, 'Success', 'Failed', 'Cancelled', 'Skipped')}\n• ${acmError || 'Check workflow logs for details'}\n• Action: Update pipeline branch and trigger build manually in Cloud Manager`
     : `*Adobe Cloud Manager*\n• Pipeline branch updated to \`${newBranch}\`\n• Stage pipeline triggered successfully`;
 
   const payload = coreSuccess
@@ -639,24 +708,28 @@ function buildSummaryReply() {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Failed Steps*\n${[
-                jira !== 'success' ? `• Jira updates: ${jira}` : null,
-                prs !== 'success' ? `• PR notifications: ${prs}` : null
-              ].filter(Boolean).join('\n') || '• Review workflow logs for details.'}`
+              text: `*Failure Summary*\n${failureReasons.join('\n') || '• Review workflow logs for details.'}`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Job Results*\n• Back-merge: ${backMerge}\n• Approval gate: ${approval}\n• Await PR merge: ${awaitPr}\n• Cut release branch: ${cutBranch}\n• Rotate tags: ${rotateTags}\n• Jira updates: ${jira}\n• PR notifications: ${prs}`
             }
           },
           ...(acmFailed ? [{
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Adobe Cloud Manager* (Optional)\n• Also failed, but this is not blocking\n${acmError ? `• ${acmError}` : ''}`
+              text: `*Adobe Cloud Manager* (Optional)\n• Status: ${describeResult(acmStatus, 'Success', 'Failed', 'Cancelled', 'Skipped')}\n• Also failed, but this is not blocking\n${acmError ? `• ${acmError}` : ''}`
             }
           }] : []),
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*Required Follow-up*\n• Review workflow logs\n• Fix failed steps and re-run workflow\n• If only ACM failed, update Cloud Manager manually'
+              text: '*Required Follow-up*\n• Review workflow logs\n• Fix the blocking step and re-run workflow\n• If the back-merge PR is still open, merge it before retrying\n• If only ACM failed, update Cloud Manager manually'
             }
           },
           {
