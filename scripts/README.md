@@ -17,14 +17,17 @@ All scripts are Node.js - no Python, no new dependencies beyond what your AEM pr
 .github/
   workflows/
     release-cut.yml                Run this every release
+    release-rollback.yml           Rollback a release cut (NEW)
 scripts/
   classify_tickets.js              Applies your 4 ticket classification rules via Jira API
   update_jira_filter.js            Creates new Jira filter with updated JQL for new fix version
   update_release_ticket.js         Updates release ticket description with filter and ticket list
   notify_prs.js                    Comments on all open pull requests targeting develop
   resolve_conflict_owners.js       Identifies file owners for merge conflicts
-  slack.js                         Sends Slack notifications with progress indicators
-  workflow_visualizer.js           Generates workflow progress visualizations (NEW)
+  rollback_jira.js                 Cleans up Jira artifacts during rollback (NEW)
+  rollback_prs.js                  Cleans up PR artifacts during rollback (NEW)
+  slack.js                         Sends Slack notifications for all workflow events
+  workflow_visualizer.js           Generates workflow progress visualizations
 ```
 
 > These scripts run on the GitHub Actions **runner machine** - not inside your AEM project.
@@ -602,3 +605,156 @@ All three jobs depend only on Job 3 (Rotate Tags) and can run simultaneously sin
 - **Before**: Sequential execution, one runner at a time
 - **After**: Up to 3 runners simultaneously during Jobs 4, 5 & 6
 - **Cost**: Minimal increase (same total compute time, just parallelized)
+
+
+---
+
+## 🔄 Release Rollback
+
+The rollback workflow safely undoes a release cut by reverting all changes made during the release process.
+
+### When to Use Rollback
+
+- Release was cut by mistake
+- Critical issue discovered after release cut
+- Need to redo release with different configuration
+- Back-merge conflicts cannot be resolved
+
+### What Gets Rolled Back
+
+1. **Release Branch** - Deleted from repository
+2. **Pre-release Tag** - Deleted and previous tag restored
+3. **Adobe Cloud Manager** - Pipeline reverted to previous branch
+4. **Jira Filter** - Deleted from Jira
+5. **Release Ticket** - Rollback comment added
+6. **Back-merge PR** - Closed with explanation (if still open)
+7. **PR Comments** - Bot comments removed from notified PRs
+
+### How to Trigger Rollback
+
+1. Go to **Actions** tab in GitHub
+2. Select **"Release Rollback"** workflow
+3. Click **"Run workflow"**
+4. Fill in the form:
+
+| Field | Example | Description |
+|-------|---------|-------------|
+| Release branch to delete | `release-2.03.0-minotaur` | The branch created by release cut |
+| Previous release branch | `release-2.02.0-loki` | The branch to restore to |
+| Jira release ticket | `ADCMS-9999` | Release ticket key |
+| Reason for rollback | `Critical bug found in build` | Why rollback is needed |
+
+5. Click **"Run workflow"**
+6. **Approve the rollback** when prompted (safety gate)
+7. Wait for completion
+
+### Rollback Workflow Steps
+
+```
+Step 0: Validate inputs and derive metadata
+  ↓
+Step 0a: Post Slack notification (rollback initiated)
+  ↓
+Step 1: Approval gate (requires manual approval)
+  ↓
+Step 2: Delete release branch and tags
+  ↓
+Step 3: Revert Adobe Cloud Manager pipeline (optional)
+  ↓
+Step 4: Cleanup Jira artifacts (parallel)
+  ↓
+Step 5: Cleanup PR artifacts (parallel)
+  ↓
+Step 6: Post Slack summary (rollback complete)
+```
+
+### Safety Features
+
+- **Approval Required**: Rollback cannot proceed without manual approval
+- **Validation**: Branch names validated before any changes
+- **Slack Notifications**: Team notified at start and completion
+- **Graceful Failures**: ACM failures don't block rollback
+- **Idempotent**: Safe to re-run if partially completed
+
+### What Rollback Does NOT Do
+
+- ❌ Does not revert commits in develop branch
+- ❌ Does not undo merged back-merge PR (only closes if still open)
+- ❌ Does not restore deleted Jira tickets
+- ❌ Does not revert code changes in any branch
+
+### After Rollback
+
+1. Verify rollback completed successfully in Slack
+2. Check Adobe Cloud Manager pipeline points to correct branch
+3. Verify release branch and tag are deleted
+4. Confirm Jira filter is removed
+5. If needed, manually clean up any remaining artifacts
+6. Ready to re-run release cut with corrections
+
+### Rollback Slack Notifications
+
+**Start Message:**
+```
+⚠️ Release Rollback Initiated: AEM 2.03.0 - Minotaur
+
+Release: AEM 2.03.0 - Minotaur
+Status: Awaiting Approval
+Workflow Run: #42
+Initiated By: @iam-udit
+
+Rollback Reason:
+Critical bug found in build
+
+Planned Actions:
+• Delete release branch
+• Delete pre-release tag
+• Restore previous pre-release tag
+• Revert Adobe Cloud Manager pipeline
+• Delete Jira filter
+• Add rollback comment to release ticket
+• Close back-merge PR (if open)
+• Delete bot comments from notified PRs
+
+ℹ️ This rollback requires manual approval before execution.
+
+[View Workflow] (red button)
+```
+
+**Completion Message:**
+```
+✅ Rollback Completed: AEM 2.03.0 - Minotaur
+
+Release: AEM 2.03.0 - Minotaur
+Status: Completed
+Workflow Run: #42
+Initiated By: @iam-udit
+
+Rollback Reason:
+Critical bug found in build
+
+Actions Completed:
+• Deleted release branch: release-2.03.0-minotaur
+• Deleted pre-release tag
+• Restored previous pre-release tag
+• Reverted to branch: release-2.02.0-loki
+• Deleted Jira filter
+• Added rollback comment to release ticket
+• Closed back-merge PR (if it was open)
+• Deleted bot comments from notified PRs
+
+Adobe Cloud Manager:
+• Pipeline reverted to release-2.02.0-loki
+
+Initiated by @iam-udit • View workflow
+```
+
+### Troubleshooting Rollback
+
+| Problem | Solution |
+|---------|----------|
+| Approval not appearing | Check environment protection is configured for `release-approval` |
+| Branch deletion fails | Branch may not exist - check if already deleted manually |
+| ACM revert fails | Manually update pipeline in Cloud Manager (rollback continues) |
+| Jira filter not found | Filter may have been deleted manually - rollback continues |
+| PR cleanup fails | Manually close back-merge PR and delete bot comments |

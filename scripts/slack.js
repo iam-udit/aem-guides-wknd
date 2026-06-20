@@ -759,6 +759,280 @@ function buildSummaryReply() {
   }
 
   return payload;
+
+/**
+ * Builds the Slack message for rollback workflow start.
+ *
+ * @returns {object} Slack message payload for rollback initiation.
+ */
+function buildRollbackStartMessage() {
+  const runUrl = process.env.RUN_URL || '';
+  const actor = process.env.GITHUB_ACTOR || 'unknown';
+  const runNumber = process.env.RUN_NUMBER || '?';
+  const release = process.env.NEW_VERSION_LABEL || '';
+  const reason = process.env.ROLLBACK_REASON || 'Not specified';
+
+  return {
+    channel: CHANNEL_ID,
+    text: `:warning: Release Rollback Initiated: ${release}`,
+    blocks: [
+      {
+        type: 'header',
+        text: {
+          type: 'plain_text',
+          text: `:warning: Release Rollback Initiated: ${release}`,
+          emoji: true
+        }
+      },
+      {
+        type: 'section',
+        fields: [
+          {
+            type: 'mrkdwn',
+            text: `*Release*\n${release}`
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Status*\nAwaiting Approval`
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Workflow Run*\n#${runNumber}`
+          },
+          {
+            type: 'mrkdwn',
+            text: `*Initiated By*\n@${actor}`
+          }
+        ]
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*Rollback Reason*\n${reason}`
+        }
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '*Planned Actions*\n• Delete release branch\n• Delete pre-release tag\n• Restore previous pre-release tag\n• Revert Adobe Cloud Manager pipeline\n• Delete Jira filter\n• Add rollback comment to release ticket\n• Close back-merge PR (if open)\n• Delete bot comments from notified PRs'
+        }
+      },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: ':information_source: *This rollback requires manual approval before execution.*'
+        }
+      },
+      {
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: {
+              type: 'plain_text',
+              text: 'View Workflow',
+              emoji: false
+            },
+            url: runUrl,
+            style: 'danger'
+          }
+        ]
+      }
+    ]
+  };
+}
+
+/**
+ * Builds the Slack summary message for rollback completion.
+ *
+ * @returns {object} Slack message payload for rollback summary.
+ */
+function buildRollbackSummaryReply() {
+  const release = process.env.NEW_VERSION_LABEL || '';
+  const releaseBranch = process.env.RELEASE_BRANCH_TO_DELETE || '';
+  const prevBranch = process.env.PREVIOUS_RELEASE_BRANCH || '';
+  const reason = process.env.ROLLBACK_REASON || 'Not specified';
+  const actor = process.env.GITHUB_ACTOR || 'unknown';
+  const runNumber = process.env.RUN_NUMBER || '?';
+  const runUrl = process.env.RUN_URL || '';
+  const threadTs = process.env.THREAD_TS;
+
+  const deleteBranch = process.env.DELETE_BRANCH_RESULT || 'unknown';
+  const acm = process.env.ACM_RESULT || 'unknown';
+  const acmStatus = process.env.ACM_STATUS || acm;
+  const jira = process.env.JIRA_RESULT || 'unknown';
+  const prs = process.env.PRS_RESULT || 'unknown';
+
+  if (!threadTs) {
+    console.log('[Slack] THREAD_TS not provided, posting as standalone message');
+  }
+
+  const allSuccess = deleteBranch === 'success' && jira === 'success' && prs === 'success';
+  const acmFailed = acmStatus !== 'success';
+
+  const payload = allSuccess
+    ? {
+        channel: CHANNEL_ID,
+        text: acmFailed
+          ? `:white_check_mark: Rollback Completed (ACM Warning): ${release}`
+          : `:white_check_mark: Rollback Completed: ${release}`,
+        blocks: [
+          {
+            type: 'header',
+            text: {
+              type: 'plain_text',
+              text: acmFailed
+                ? `:white_check_mark: Rollback Completed (ACM Warning): ${release}`
+                : `:white_check_mark: Rollback Completed: ${release}`,
+              emoji: true
+            }
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: `*Release*\n${release}`
+              },
+              {
+                type: 'mrkdwn',
+                text: acmFailed ? `*Status*\nCompleted with ACM Warning` : `*Status*\nCompleted`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Workflow Run*\n#${runNumber}`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Initiated By*\n@${actor}`
+              }
+            ]
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Rollback Reason*\n${reason}`
+            }
+          },
+          {
+            type: 'divider'
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Actions Completed*\n• Deleted release branch: \`${releaseBranch}\`\n• Deleted pre-release tag\n• Restored previous pre-release tag\n• Reverted to branch: \`${prevBranch}\`\n• Deleted Jira filter\n• Added rollback comment to release ticket\n• Closed back-merge PR (if it was open)\n• Deleted bot comments from notified PRs`
+            }
+          },
+          ...(acmFailed ? [{
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Adobe Cloud Manager* (Optional)\n• Status: Failed\n• Action: Manually revert pipeline to \`${prevBranch}\` in Cloud Manager`
+            }
+          }, {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: ':information_source: *Note:* Adobe Cloud Manager is an optional step. The rollback completed successfully. Please update the pipeline manually in Cloud Manager.'
+            }
+          }] : [{
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Adobe Cloud Manager*\n• Pipeline reverted to \`${prevBranch}\``
+            }
+          }]),
+          {
+            type: 'context',
+            elements: [
+              {
+                type: 'mrkdwn',
+                text: `Initiated by @${actor} • <${runUrl}|View workflow>`
+              }
+            ]
+          }
+        ]
+      }
+    : {
+        channel: CHANNEL_ID,
+        text: `:x: Rollback Failed: ${release}`,
+        blocks: [
+          {
+            type: 'header',
+            text: {
+              type: 'plain_text',
+              text: `:x: Rollback Failed: ${release}`,
+              emoji: true
+            }
+          },
+          {
+            type: 'section',
+            fields: [
+              {
+                type: 'mrkdwn',
+                text: `*Release*\n${release}`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Status*\nFailed`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Workflow Run*\n#${runNumber}`
+              },
+              {
+                type: 'mrkdwn',
+                text: `*Initiated By*\n@${actor}`
+              }
+            ]
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Rollback Reason*\n${reason}`
+            }
+          },
+          {
+            type: 'divider'
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*Job Results*\n• Delete branch/tags: ${deleteBranch}\n• Revert ACM pipeline: ${acmStatus}\n• Cleanup Jira: ${jira}\n• Cleanup PRs: ${prs}`
+            }
+          },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '*Required Follow-up*\n• Review workflow logs for failure details\n• Complete rollback steps manually if needed\n• Verify system state before retrying'
+            }
+          },
+          {
+            type: 'context',
+            elements: [
+              {
+                type: 'mrkdwn',
+                text: `Initiated by @${actor} • <${runUrl}|View workflow logs>`
+              }
+            ]
+          }
+        ]
+      };
+
+  if (threadTs) {
+    payload.thread_ts = threadTs;
+  }
+
+  return payload;
+}
 }
 
 /**
@@ -783,8 +1057,16 @@ async function main() {
       payload = buildSummaryReply();
       messageType = 'summary (thread reply)';
       break;
+    case 'rollback_start':
+      payload = buildRollbackStartMessage();
+      messageType = 'rollback start (main thread)';
+      break;
+    case 'rollback_summary':
+      payload = buildRollbackSummaryReply();
+      messageType = 'rollback summary (thread reply)';
+      break;
     default:
-      console.error(`Unknown NOTIFICATION_TYPE: "${TYPE}". Must be start | backmerge | summary`);
+      console.error(`Unknown NOTIFICATION_TYPE: "${TYPE}". Must be start | backmerge | summary | rollback_start | rollback_summary`);
       process.exit(1);
   }
 
@@ -792,8 +1074,8 @@ async function main() {
   const response = await postToSlack(payload);
   console.log(`[Slack] Notification sent successfully`);
 
-  // For start message, save the thread timestamp for later replies
-  if (TYPE === 'start' && response.ts) {
+  // For start messages, save the thread timestamp for later replies
+  if ((TYPE === 'start' || TYPE === 'rollback_start') && response.ts) {
     const outputFile = process.env.GITHUB_OUTPUT;
     if (outputFile) {
       fs.appendFileSync(outputFile, `slack_thread_ts=${response.ts}\n`);

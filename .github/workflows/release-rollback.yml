@@ -1,0 +1,410 @@
+# ============================================================
+# Release Rollback Workflow - ADCMS Team
+# ============================================================
+# Trigger: Manual (workflow_dispatch) from GitHub Actions UI
+#
+# Purpose: Safely rollback a release cut by undoing all changes:
+#   - Delete new release branch
+#   - Delete new pre-release tag
+#   - Restore previous pre-release tag
+#   - Revert ACM pipeline to previous branch
+#   - Delete Jira filter
+#   - Add rollback comment to release ticket
+#   - Close back-merge PR (if still open)
+#   - Delete bot comments from notified PRs
+#
+# Safety: Requires manual approval before executing rollback
+# ============================================================
+
+name: Release Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_branch_to_delete:
+        description: "Release branch to delete (e.g. release-2.03.0-minotaur)"
+        required: true
+        type: string
+      previous_release_branch:
+        description: "Previous release branch to restore (e.g. release-2.02.0-loki)"
+        required: true
+        type: string
+      jira_release_ticket:
+        description: "Jira release ticket key (e.g. ADCMS-9999)"
+        required: true
+        type: string
+      reason:
+        description: "Reason for rollback"
+        required: true
+        type: string
+
+env:
+  RELEASE_BRANCH_TO_DELETE: "${{ inputs.release_branch_to_delete }}"
+  PREVIOUS_RELEASE_BRANCH: "${{ inputs.previous_release_branch }}"
+  JIRA_RELEASE_TICKET: "${{ inputs.jira_release_ticket }}"
+  ROLLBACK_REASON: "${{ inputs.reason }}"
+
+
+# ============================================================
+# JOB 0 — Derive metadata and validate inputs
+# ============================================================
+jobs:
+  derive_rollback_metadata:
+    name: "0 · Validate and derive metadata"
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.derive.outputs.new_version }}
+      new_codename: ${{ steps.derive.outputs.new_codename }}
+      new_version_label: ${{ steps.derive.outputs.new_version_label }}
+      new_prerelease_tag: ${{ steps.derive.outputs.new_prerelease_tag }}
+      prev_version: ${{ steps.derive.outputs.prev_version }}
+      prev_codename: ${{ steps.derive.outputs.prev_codename }}
+      prev_version_label: ${{ steps.derive.outputs.prev_version_label }}
+      prev_prerelease_tag: ${{ steps.derive.outputs.prev_prerelease_tag }}
+
+    steps:
+      - name: Validate branch naming and derive metadata
+        id: derive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NEW_BRANCH="${{ inputs.release_branch_to_delete }}"
+          PREV_BRANCH="${{ inputs.previous_release_branch }}"
+
+          BRANCH_PATTERN='^release-([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z0-9._-]+)$'
+
+          # Validate new branch
+          if [[ "$NEW_BRANCH" =~ $BRANCH_PATTERN ]]; then
+            NEW_VERSION="${BASH_REMATCH[1]}"
+            NEW_CODENAME_RAW="${BASH_REMATCH[2]}"
+          else
+            echo "::error::Invalid release branch format: $NEW_BRANCH"
+            exit 1
+          fi
+
+          # Validate previous branch
+          if [[ "$PREV_BRANCH" =~ $BRANCH_PATTERN ]]; then
+            PREV_VERSION="${BASH_REMATCH[1]}"
+            PREV_CODENAME_RAW="${BASH_REMATCH[2]}"
+          else
+            echo "::error::Invalid previous branch format: $PREV_BRANCH"
+            exit 1
+          fi
+
+          NEW_CODENAME=$(echo "$NEW_CODENAME_RAW" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+          PREV_CODENAME=$(echo "$PREV_CODENAME_RAW" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+
+          NEW_VERSION_LABEL="AEM ${NEW_VERSION} - ${NEW_CODENAME}"
+          PREV_VERSION_LABEL="AEM ${PREV_VERSION} - ${PREV_CODENAME}"
+          NEW_PRERELEASE_TAG="${NEW_VERSION}-beta"
+          PREV_PRERELEASE_TAG="${PREV_VERSION}-beta"
+
+          {
+            echo "new_version=${NEW_VERSION}"
+            echo "new_codename=${NEW_CODENAME}"
+            echo "new_version_label=${NEW_VERSION_LABEL}"
+            echo "new_prerelease_tag=${NEW_PRERELEASE_TAG}"
+            echo "prev_version=${PREV_VERSION}"
+            echo "prev_codename=${PREV_CODENAME}"
+            echo "prev_version_label=${PREV_VERSION_LABEL}"
+            echo "prev_prerelease_tag=${PREV_PRERELEASE_TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "[Rollback Metadata]"
+          echo "  Branch to delete: ${NEW_BRANCH}"
+          echo "  Version to rollback: ${NEW_VERSION_LABEL}"
+          echo "  Tag to delete: ${NEW_PRERELEASE_TAG}"
+          echo "  Restore to: ${PREV_BRANCH}"
+          echo "  Restore version: ${PREV_VERSION_LABEL}"
+          echo "  Restore tag: ${PREV_PRERELEASE_TAG}"
+
+  slack_start:
+    name: "0a · Notify Slack - Rollback initiated"
+    runs-on: ubuntu-latest
+    needs: derive_rollback_metadata
+    outputs:
+      thread_ts: ${{ steps.notify.outputs.slack_thread_ts }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Post rollback start to Slack
+        id: notify
+        run: node scripts/slack.js
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+          NOTIFICATION_TYPE: rollback_start
+          NEW_VERSION_LABEL: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}
+          ROLLBACK_REASON: ${{ env.ROLLBACK_REASON }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+
+# ============================================================
+# JOB 1 — Approval gate (safety check)
+# ============================================================
+  approve_rollback:
+    name: "1 · Approve rollback (safety gate)"
+    runs-on: ubuntu-latest
+    needs: [derive_rollback_metadata, slack_start]
+    environment:
+      name: release-approval
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Rollback approval checkpoint
+        run: |
+          echo "⚠️  ROLLBACK APPROVAL REQUIRED"
+          echo ""
+          echo "This will rollback the following release:"
+          echo "  Release: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}"
+          echo "  Branch: ${{ env.RELEASE_BRANCH_TO_DELETE }}"
+          echo "  Reason: ${{ env.ROLLBACK_REASON }}"
+          echo ""
+          echo "Actions that will be performed:"
+          echo "  ✓ Delete release branch: ${{ env.RELEASE_BRANCH_TO_DELETE }}"
+          echo "  ✓ Delete pre-release tag: ${{ needs.derive_rollback_metadata.outputs.new_prerelease_tag }}"
+          echo "  ✓ Restore pre-release tag: ${{ needs.derive_rollback_metadata.outputs.prev_prerelease_tag }}"
+          echo "  ✓ Revert ACM pipeline to: ${{ env.PREVIOUS_RELEASE_BRANCH }}"
+          echo "  ✓ Delete Jira filter for: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}"
+          echo "  ✓ Add rollback comment to: ${{ env.JIRA_RELEASE_TICKET }}"
+          echo "  ✓ Close back-merge PR (if open)"
+          echo "  ✓ Delete bot comments from notified PRs"
+          echo ""
+          echo "⏸️  Waiting for approval..."
+
+
+# ============================================================
+# JOB 2 — Delete release branch and tags
+# ============================================================
+  delete_branch_and_tags:
+    name: "2 · Delete branch and tags"
+    runs-on: ubuntu-latest
+    needs: [derive_rollback_metadata, approve_rollback]
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Delete release branch
+        run: |
+          BRANCH="${{ env.RELEASE_BRANCH_TO_DELETE }}"
+          
+          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
+            git push origin --delete "$BRANCH"
+            echo "✅ Deleted branch: $BRANCH"
+          else
+            echo "⚠️  Branch not found: $BRANCH (may have been deleted already)"
+          fi
+
+      - name: Delete new pre-release tag and release
+        run: |
+          TAG="${{ needs.derive_rollback_metadata.outputs.new_prerelease_tag }}"
+          
+          gh release delete "$TAG" --yes 2>/dev/null || echo "⚠️  Release not found: $TAG"
+          git push origin ":refs/tags/$TAG" 2>/dev/null || echo "⚠️  Tag not found: $TAG"
+          echo "✅ Deleted pre-release tag: $TAG"
+
+      - name: Restore previous pre-release tag
+        run: |
+          TAG="${{ needs.derive_rollback_metadata.outputs.prev_prerelease_tag }}"
+          PREV_VERSION="${{ needs.derive_rollback_metadata.outputs.prev_version }}"
+          PREV_CODENAME="${{ needs.derive_rollback_metadata.outputs.prev_codename }}"
+          
+          # Check if tag already exists
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "✅ Pre-release tag already exists: $TAG"
+          else
+            gh release create "$TAG" \
+              --target "${{ env.PREVIOUS_RELEASE_BRANCH }}" \
+              --title "Release ${PREV_VERSION} ${PREV_CODENAME}" \
+              --notes "Pre-release - ${PREV_VERSION} ${PREV_CODENAME} (restored after rollback)" \
+              --prerelease
+            echo "✅ Restored pre-release tag: $TAG"
+          fi
+
+
+# ============================================================
+# JOB 3 — Revert Adobe Cloud Manager pipeline
+# ============================================================
+  revert_acm_pipeline:
+    name: "3 · Revert ACM pipeline"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: [derive_rollback_metadata, delete_branch_and_tags]
+    outputs:
+      status: ${{ steps.set_status.outputs.status }}
+
+    steps:
+      - name: Get Adobe IMS access token
+        id: acm_auth
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            "https://ims-na1.adobelogin.com/ims/token/v3" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${{ vars.ACM_CLIENT_ID }}" \
+            -d "client_secret=${{ secrets.ACM_CLIENT_SECRET }}" \
+            -d "scope=openid,AdobeID,read_organizations,additional_info.projectedProductContext")
+          
+          TOKEN=$(echo "$RESPONSE" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+            try {
+              const parsed = JSON.parse(d);
+              if (parsed.access_token) console.log(parsed.access_token);
+              else process.exit(1);
+            } catch(e) { process.exit(1); }
+          })")
+          
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Failed to obtain ACM access token"
+            exit 1
+          fi
+          
+          echo "::add-mask::$TOKEN"
+          echo "acm_token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Revert pipeline branch to previous release
+        run: |
+          # Fetch current pipeline configuration
+          PIPELINE=$(curl -s \
+            -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+            -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
+            "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}")
+
+          # Update branch in BUILD phase to previous release
+          UPDATED=$(echo "$PIPELINE" | node -e "
+            let d=''; process.stdin.on('data',c=>d+=c).on('end',()=>{
+              try {
+                const p = JSON.parse(d);
+                if (!p.phases) process.exit(1);
+                p.phases.forEach(ph=>{ if(ph.type==='BUILD') ph.branch='${{ env.PREVIOUS_RELEASE_BRANCH }}'; });
+                console.log(JSON.stringify(p));
+              } catch(e) { process.exit(1); }
+            })")
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+            "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}" \
+            -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+            -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
+            -H "Content-Type: application/json" \
+            -d "$UPDATED")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ ACM pipeline reverted to ${{ env.PREVIOUS_RELEASE_BRANCH }}"
+          else
+            echo "::error::Failed to revert ACM pipeline (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+      - name: Set ACM status
+        id: set_status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+
+# ============================================================
+# JOB 4 — Cleanup Jira artifacts
+# ============================================================
+  cleanup_jira:
+    name: "4 · Cleanup Jira artifacts"
+    runs-on: ubuntu-latest
+    needs: [derive_rollback_metadata, delete_branch_and_tags]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Delete Jira filter and add rollback comment
+        run: node scripts/rollback_jira.js
+        env:
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ vars.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ vars.JIRA_PROJECT_KEY }}
+          JIRA_RELEASE_TICKET: ${{ env.JIRA_RELEASE_TICKET }}
+          NEW_VERSION_LABEL: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}
+          ROLLBACK_REASON: ${{ env.ROLLBACK_REASON }}
+          GITHUB_ACTOR: ${{ github.actor }}
+
+
+# ============================================================
+# JOB 5 — Cleanup PR artifacts
+# ============================================================
+  cleanup_prs:
+    name: "5 · Cleanup PR artifacts"
+    runs-on: ubuntu-latest
+    needs: [derive_rollback_metadata, delete_branch_and_tags]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Close back-merge PR and delete bot comments
+        run: node scripts/rollback_prs.js
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_BRANCH_TO_DELETE: ${{ env.RELEASE_BRANCH_TO_DELETE }}
+          NEW_VERSION_LABEL: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}
+          ROLLBACK_REASON: ${{ env.ROLLBACK_REASON }}
+
+
+# ============================================================
+# JOB 6 — Final Slack summary
+# ============================================================
+  notify_slack_complete:
+    name: "6 · Slack rollback summary"
+    runs-on: ubuntu-latest
+    needs: [derive_rollback_metadata, slack_start, delete_branch_and_tags, revert_acm_pipeline, cleanup_jira, cleanup_prs]
+    if: always() && needs.slack_start.result == 'success'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Send rollback summary to Slack
+        run: node scripts/slack.js
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+          NOTIFICATION_TYPE: rollback_summary
+          NEW_VERSION_LABEL: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}
+          RELEASE_BRANCH_TO_DELETE: ${{ env.RELEASE_BRANCH_TO_DELETE }}
+          PREVIOUS_RELEASE_BRANCH: ${{ env.PREVIOUS_RELEASE_BRANCH }}
+          ROLLBACK_REASON: ${{ env.ROLLBACK_REASON }}
+          DELETE_BRANCH_RESULT: ${{ needs.delete_branch_and_tags.result }}
+          ACM_RESULT: ${{ needs.revert_acm_pipeline.result }}
+          ACM_STATUS: ${{ needs.revert_acm_pipeline.outputs.status }}
+          JIRA_RESULT: ${{ needs.cleanup_jira.result }}
+          PRS_RESULT: ${{ needs.cleanup_prs.result }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          THREAD_TS: ${{ needs.slack_start.outputs.thread_ts }}
+
+# Made with Bob
