@@ -149,6 +149,12 @@ jobs:
         with:
           token: ${{ secrets.GH_TOKEN }}
 
+      - name: Generate workflow visualization
+        run: node scripts/workflow_visualizer.js
+        env:
+          WORKFLOW_STAGE: start
+          OUTPUT_FORMAT: both
+
       - name: Post start message to Slack
         id: notify
         run: node scripts/slack.js
@@ -594,6 +600,7 @@ jobs:
 # ============================================================
 # JOB 4 — Adobe Cloud Manager: update pipeline + trigger stage
 # (OPTIONAL - workflow continues on failure)
+# Runs in PARALLEL with Jira updates (Job 5)
 # ============================================================
   adobe_cloud_manager:
     name: "4 · Adobe Cloud Manager (optional)"
@@ -726,6 +733,7 @@ jobs:
 # ============================================================
 # JOB 5 — Compare tags, classify tickets, update Jira filter
 #          and update release ticket description
+# Runs in PARALLEL with Adobe Cloud Manager (Job 4)
 # ============================================================
   jira_release:
     name: "5 · Jira release updates"
@@ -810,6 +818,7 @@ jobs:
 
 # ============================================================
 # JOB 6 — Notify open PRs targeting develop
+# Waits for BOTH Job 4 (ACM) and Job 5 (Jira) to complete
 # ============================================================
   notify_open_prs:
     name: "6 · Notify open PRs"
@@ -874,6 +883,20 @@ jobs:
             SECONDS=$((DURATION % 60))
             echo "workflow_duration=${MINUTES}m ${SECONDS}s" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Generate final workflow visualization
+        run: node scripts/workflow_visualizer.js
+        env:
+          WORKFLOW_STAGE: complete
+          BACK_MERGE_RESULT: ${{ needs.back_merge.result }}
+          APPROVAL_RESULT: ${{ needs.approve_already_merged.result }}
+          AWAIT_PR_RESULT: ${{ needs.await_pr_merge.result }}
+          CUT_BRANCH_RESULT: ${{ needs.cut_release_branch.result }}
+          ROTATE_TAGS_RESULT: ${{ needs.rotate_tags.result }}
+          ACM_RESULT: ${{ needs.adobe_cloud_manager.result }}
+          JIRA_RESULT: ${{ needs.jira_release.result }}
+          PRS_RESULT: ${{ needs.notify_open_prs.result }}
+          OUTPUT_FORMAT: both
 
       - name: Send release cut summary to Slack (threaded)
         run: node scripts/slack.js
