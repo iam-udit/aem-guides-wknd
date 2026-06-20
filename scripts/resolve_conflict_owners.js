@@ -280,7 +280,7 @@ async function main() {
       const slackUser = await lookupSlackUserByEmail(actorData.email);
       if (slackUser) {
         releaseCutOwnerSlackId = slackUser.id;
-        uniqueSlackIds.add(slackUser.id);
+        // Don't add to uniqueSlackIds - release cut owner is shown separately
         console.log(`  ✓ Found Slack user: ${slackUser.name} (${slackUser.id})`);
       } else {
         console.log(`  ✗ No Slack user found for email: ${actorData.email}`);
