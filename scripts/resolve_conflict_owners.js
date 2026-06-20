@@ -120,9 +120,11 @@ function lookupSlackUserByEmail(email) {
       res.on('end', () => {
         try {
           const response = JSON.parse(data);
+          console.log(`      Slack API response for ${email}:`, JSON.stringify(response, null, 2));
           if (response.ok && response.user) {
             resolve(response.user);
           } else {
+            console.log(`      Slack lookup failed: ${response.error || 'user not found'}`);
             resolve(null);
           }
         } catch (err) {
@@ -154,10 +156,13 @@ async function getLastCommitAuthor(filePath, branch) {
     }
 
     const lastCommit = commits[0];
-    const author = lastCommit.commit.author;
-    const githubUser = lastCommit.author?.login || author.name || 'unknown';
-    const email = author.email || 'unknown@example.com';
+    const commitAuthor = lastCommit.commit.author;
+    const githubUser = lastCommit.author?.login || commitAuthor.name || 'unknown';
+    
+    // The email from commit.author is the one used in the git commit
+    const email = commitAuthor.email || 'unknown@example.com';
 
+    console.log(`      Found: ${githubUser} <${email}>`);
     return { github_username: githubUser, email };
   } catch (err) {
     console.warn(`  Error fetching commit author for ${filePath} on ${branch}: ${err.message}`);
@@ -179,17 +184,27 @@ async function resolveOwner(author) {
     slack_handle: null,
   };
 
+  // Skip lookup for unknown/invalid emails
+  if (!author.email || author.email === 'unknown@example.com' || !author.email.includes('@')) {
+    owner.slack_handle = `github:${author.github_username}`;
+    console.log(`      Skipping Slack lookup for invalid email: ${author.email}`);
+    return owner;
+  }
+
   try {
+    console.log(`      Looking up Slack user for: ${author.email}`);
     const slackUser = await lookupSlackUserByEmail(author.email);
     if (slackUser) {
       owner.slack_id = slackUser.id;
       owner.slack_handle = `@${slackUser.name || slackUser.real_name || author.github_username}`;
+      console.log(`      ✓ Found Slack user: ${owner.slack_handle} (${owner.slack_id})`);
     } else {
       // Email mismatch - use GitHub username prefixed with github:
       owner.slack_handle = `github:${author.github_username}`;
+      console.log(`      ✗ No Slack user found, using: ${owner.slack_handle}`);
     }
   } catch (err) {
-    console.warn(`  Could not resolve Slack user for ${author.email}: ${err.message}`);
+    console.warn(`      Could not resolve Slack user for ${author.email}: ${err.message}`);
     owner.slack_handle = `github:${author.github_username}`;
   }
 
@@ -228,20 +243,17 @@ async function main() {
     // Get last commit author from develop branch
     console.log(`    Checking develop branch...`);
     const developAuthor = await getLastCommitAuthor(filePath, 'develop');
-    console.log(`      Develop owner: ${developAuthor.github_username} (${developAuthor.email})`);
     
     // Get last commit author from previous release branch
     console.log(`    Checking ${PREV_BRANCH}...`);
     const releaseAuthor = await getLastCommitAuthor(filePath, PREV_BRANCH);
-    console.log(`      Release owner: ${releaseAuthor.github_username} (${releaseAuthor.email})`);
     
     // Resolve Slack users
     console.log(`    Resolving Slack users...`);
+    console.log(`      Develop owner:`);
     const developOwner = await resolveOwner(developAuthor);
+    console.log(`      Release owner:`);
     const releaseOwner = await resolveOwner(releaseAuthor);
-    
-    console.log(`      Develop: ${developOwner.slack_handle || 'not found'}`);
-    console.log(`      Release: ${releaseOwner.slack_handle || 'not found'}`);
     
     fileOwners.push({
       path: filePath,
@@ -263,17 +275,20 @@ async function main() {
   try {
     // Try to get the GitHub user's email
     const actorData = await ghRequest('GET', `/users/${GITHUB_ACTOR}`);
+    console.log(`  GitHub user data:`, JSON.stringify(actorData, null, 2));
+    
     if (actorData.email) {
+      console.log(`  Attempting Slack lookup for: ${actorData.email}`);
       const slackUser = await lookupSlackUserByEmail(actorData.email);
       if (slackUser) {
         releaseCutOwnerSlackId = slackUser.id;
         uniqueSlackIds.add(slackUser.id);
-        console.log(`  Found Slack user: ${slackUser.name} (${slackUser.id})`);
+        console.log(`  ✓ Found Slack user: ${slackUser.name} (${slackUser.id})`);
       } else {
-        console.log(`  No Slack user found for email: ${actorData.email}`);
+        console.log(`  ✗ No Slack user found for email: ${actorData.email}`);
       }
     } else {
-      console.log(`  No public email available for GitHub user: ${GITHUB_ACTOR}`);
+      console.log(`  ✗ No public email available for GitHub user: ${GITHUB_ACTOR}`);
     }
   } catch (err) {
     console.warn(`  Could not resolve release cut owner: ${err.message}`);
