@@ -309,6 +309,19 @@ jobs:
           echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
           echo "PR created: $PR_URL"
 
+      - name: Resolve conflict file owners
+        if: env.DRY_RUN == 'false' && steps.merge.outputs.had_conflict == 'true'
+        run: node scripts/resolve_conflict_owners.js
+        env:
+          GH_TOKEN:             ${{ secrets.GH_TOKEN }}
+          SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
+          CONFLICT_FILES:       ${{ steps.merge.outputs.conflict_files }}
+          PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
+          GITHUB_ACTOR:         ${{ github.actor }}
+          GITHUB_REPOSITORY:    ${{ github.repository }}
+          GITHUB_SERVER_URL:    ${{ github.server_url }}
+          OWNERS_OUTPUT_PATH:   /tmp/conflict_owners.json
+
       - name: Notify Slack — back-merge status (threaded)
         if: env.DRY_RUN == 'false'
         run: node scripts/slack.js
@@ -323,33 +336,9 @@ jobs:
           ALREADY_MERGED:       ${{ steps.merge.outputs.already_merged }}
           HAD_CONFLICT:         ${{ steps.merge.outputs.had_conflict }}
           CONFLICT_FILES:       ${{ steps.merge.outputs.conflict_files }}
+          OWNERS_JSON:          /tmp/conflict_owners.json
           THREAD_TS:            ${{ needs.slack_start.outputs.thread_ts }}
           RUN_URL:              ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-      - name: Resolve conflict file owners
-        if: env.DRY_RUN == 'false' && steps.merge.outputs.had_conflict == 'true'
-        run: node scripts/resolve_conflict_owners.js
-        env:
-          GH_TOKEN:             ${{ secrets.GH_TOKEN }}
-          SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
-          CONFLICT_FILES:       ${{ steps.merge.outputs.conflict_files }}
-          PREV_RELEASE_BRANCH:  ${{ env.PREV_RELEASE_BRANCH }}
-          GITHUB_ACTOR:         ${{ github.actor }}
-          GITHUB_REPOSITORY:    ${{ github.repository }}
-          GITHUB_SERVER_URL:    ${{ github.server_url }}
-          OWNERS_OUTPUT_PATH:   /tmp/conflict_owners.json
-
-      - name: Notify Slack — conflict owners (threaded)
-        if: env.DRY_RUN == 'false' && steps.merge.outputs.had_conflict == 'true'
-        run: node scripts/slack.js
-        env:
-          SLACK_BOT_TOKEN:      ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_ID:     ${{ vars.SLACK_CHANNEL_ID }}
-          NOTIFICATION_TYPE:    conflict_owners
-          THREAD_TS:            ${{ needs.slack_start.outputs.thread_ts }}
-          OWNERS_JSON:          /tmp/conflict_owners.json
-          PR_URL:               ${{ steps.create_pr.outputs.pr_url }}
-          NEW_VERSION_LABEL:    ${{ env.NEW_VERSION_LABEL }}
 
       - name: Summarise result
         run: |

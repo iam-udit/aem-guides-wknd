@@ -6,24 +6,21 @@
  *
  * Thread Structure:
  * 1. Main thread message - posted at workflow start
- * 2. Back-merge reply - posted after back-merge completes
- * 3. Conflict owners reply - posted when conflicts are detected (optional)
- * 4. Final summary reply - posted at workflow end
+ * 2. Back-merge reply - posted after back-merge completes (includes conflict owners if conflicts exist)
+ * 3. Final summary reply - posted at workflow end
  *
  * Environment variables:
  *   SLACK_BOT_TOKEN     Slack Bot User OAuth Token (xoxb-...)
  *   SLACK_CHANNEL_ID    Channel ID (e.g., C01234567)
- *   NOTIFICATION_TYPE   One of: start | backmerge | conflict_owners | summary
+ *   NOTIFICATION_TYPE   One of: start | backmerge | summary
  *
  *   For 'start':
  *     NEW_VERSION_LABEL, GITHUB_ACTOR, RUN_NUMBER, RUN_URL
  *
  *   For 'backmerge':
  *     NEW_VERSION_LABEL, PREV_RELEASE_BRANCH, PR_BRANCH, PR_URL, ALREADY_MERGED,
- *     HAD_CONFLICT, CONFLICT_FILES (comma-separated), THREAD_TS (from start message)
- *
- *   For 'conflict_owners':
- *     OWNERS_JSON (path to JSON file), THREAD_TS, PR_URL, NEW_VERSION_LABEL
+ *     HAD_CONFLICT, CONFLICT_FILES (comma-separated), OWNERS_JSON (optional, for conflict owners),
+ *     THREAD_TS (from start message)
  *
  *   For 'summary':
  *     NEW_VERSION_LABEL, NEW_RELEASE_BRANCH, NEW_PRERELEASE_TAG,
@@ -179,9 +176,21 @@ function buildBackmergeReply() {
   const prevBranch = process.env.PREV_RELEASE_BRANCH || '';
   const prBranch = process.env.PR_BRANCH || '';
   const threadTs = process.env.THREAD_TS;
+  const ownersJsonPath = process.env.OWNERS_JSON;
 
   if (!threadTs) {
     console.log('[Slack] THREAD_TS not provided, posting as standalone message');
+  }
+
+  // Load owners data if conflicts exist and owners file is provided
+  let ownersData = null;
+  if (hadConflict && ownersJsonPath) {
+    try {
+      const fileContent = fs.readFileSync(ownersJsonPath, 'utf8');
+      ownersData = JSON.parse(fileContent);
+    } catch (err) {
+      console.warn(`[Slack] Could not load owners data: ${err.message}`);
+    }
   }
 
   // Handle "already merged" scenario - branches are in sync
@@ -259,74 +268,134 @@ function buildBackmergeReply() {
     return payload;
   }
 
+  // Build conflict payload with optional owner information
+  const conflictBlocks = [
+    {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: ':warning: Back-merge PR Raised (Merge Conflicts)',
+        emoji: true
+      }
+    },
+    {
+      type: 'section',
+      fields: [
+        {
+          type: 'mrkdwn',
+          text: '*Stage*\nBack-merge'
+        },
+        {
+          type: 'mrkdwn',
+          text: '*Status*\nConflicts Require Action'
+        }
+      ]
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Scope*\nPrevious release branch \`${prevBranch}\` is being merged into \`develop\`.`
+      }
+    }
+  ];
+
+  // Add file owners section if available
+  if (ownersData && ownersData.files && ownersData.files.length > 0) {
+    // Add divider before file owners
+    conflictBlocks.push({ type: 'divider' });
+    
+    // Add each file with its owners
+    ownersData.files.forEach(file => {
+      const developHandle = file.develop_owner.slack_id
+        ? `<@${file.develop_owner.slack_id}>`
+        : file.develop_owner.slack_handle;
+      
+      const releaseHandle = file.release_owner.slack_id
+        ? `<@${file.release_owner.slack_id}>`
+        : file.release_owner.slack_handle;
+
+      conflictBlocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*\`${file.path}\`*\n• Develop branch owner: ${developHandle}\n• Release branch owner: ${releaseHandle}`
+        }
+      });
+    });
+
+    // Add divider after file owners
+    conflictBlocks.push({ type: 'divider' });
+
+    // Add all file owners mention
+    const ownerMentions = ownersData.unique_owners.map(id => `<@${id}>`).join(', ');
+    if (ownerMentions) {
+      conflictBlocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*All File Owners*\n${ownerMentions}`
+        }
+      });
+    }
+
+    // Add release cut owner if available
+    if (ownersData.release_cut_owner_slack_id) {
+      conflictBlocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*Release Cut Owner*\n<@${ownersData.release_cut_owner_slack_id}>`
+        }
+      });
+    }
+  } else {
+    // Fallback to simple file list if no owner data
+    conflictBlocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Conflicting Files*\n${(process.env.CONFLICT_FILES || '')
+          .split(',')
+          .map(f => f.trim())
+          .filter(Boolean)
+          .map(f => `• \`${f}\``)
+          .join('\n') || '• Review the pull request for file-level details.'}`
+      }
+    });
+  }
+
+  // Add required action section
+  conflictBlocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `*Required Action*\n• Check out the back-merge branch${prBranch ? ` \`${prBranch}\`` : ''}\n• Resolve all merge conflicts\n• Commit and push the resolution\n• Merge the pull request into \`develop\`\n• Workflow execution will continue automatically after merge`
+    }
+  });
+
+  // Add PR button
+  conflictBlocks.push({
+    type: 'actions',
+    elements: [
+      {
+        type: 'button',
+        text: {
+          type: 'plain_text',
+          text: 'Open Pull Request',
+          emoji: false
+        },
+        url: prUrl,
+        style: 'danger'
+      }
+    ]
+  });
+
   const payload = hadConflict
     ? {
         channel: CHANNEL_ID,
         text: ':warning: Back-merge PR Raised (Merge Conflicts)',
-        blocks: [
-          {
-            type: 'header',
-            text: {
-              type: 'plain_text',
-              text: ':warning: Back-merge PR Raised (Merge Conflicts)',
-              emoji: true
-            }
-          },
-          {
-            type: 'section',
-            fields: [
-              {
-                type: 'mrkdwn',
-                text: '*Stage*\nBack-merge'
-              },
-              {
-                type: 'mrkdwn',
-                text: '*Status*\nConflicts Require Action'
-              }
-            ]
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Scope*\nPrevious release branch \`${prevBranch}\` is being merged into \`develop\`.`
-            }
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Conflicting Files*\n${(process.env.CONFLICT_FILES || '')
-                .split(',')
-                .map(f => f.trim())
-                .filter(Boolean)
-                .map(f => `• \`${f}\``)
-                .join('\n') || '• Review the pull request for file-level details.'}`
-            }
-          },
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Required Action*\n• Check out the back-merge branch${prBranch ? ` \`${prBranch}\`` : ''}\n• Resolve all merge conflicts\n• Commit and push the resolution\n• Merge the pull request into \`develop\`\n• Workflow execution will continue automatically after merge`
-            }
-          },
-          {
-            type: 'actions',
-            elements: [
-              {
-                type: 'button',
-                text: {
-                  type: 'plain_text',
-                  text: 'Open Pull Request',
-                  emoji: false
-                },
-                url: prUrl,
-                style: 'danger'
-              }
-            ]
-          }
-        ]
+        blocks: conflictBlocks
       }
     : {
         channel: CHANNEL_ID,
@@ -610,136 +679,6 @@ function buildSummaryReply() {
 }
 
 /**
- * Builds the threaded Slack reply for conflict owners notification.
- *
- * @returns {object} Slack message payload listing file owners for each conflicting file.
- */
-function buildConflictOwnersReply() {
-  const ownersJsonPath = process.env.OWNERS_JSON;
-  const threadTs = process.env.THREAD_TS;
-  const prUrl = process.env.PR_URL || '';
-  const release = process.env.NEW_VERSION_LABEL || '';
-
-  if (!threadTs) {
-    console.log('[Slack] THREAD_TS not provided, posting as standalone message');
-  }
-
-  if (!ownersJsonPath) {
-    throw new Error('OWNERS_JSON environment variable is required for conflict_owners notification');
-  }
-
-  // Read the owners JSON file
-  let ownersData;
-  try {
-    const fileContent = fs.readFileSync(ownersJsonPath, 'utf8');
-    ownersData = JSON.parse(fileContent);
-  } catch (err) {
-    throw new Error(`Failed to read or parse owners JSON from ${ownersJsonPath}: ${err.message}`);
-  }
-
-  const { files, unique_owners, release_cut_owner_slack_id } = ownersData;
-
-  // Build file list with owners
-  const fileBlocks = files.map(file => {
-    const developHandle = file.develop_owner.slack_id
-      ? `<@${file.develop_owner.slack_id}>`
-      : file.develop_owner.slack_handle;
-    
-    const releaseHandle = file.release_owner.slack_id
-      ? `<@${file.release_owner.slack_id}>`
-      : file.release_owner.slack_handle;
-
-    return {
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*\`${file.path}\`*\n• Develop branch owner: ${developHandle}\n• Release branch owner: ${releaseHandle}`
-      }
-    };
-  });
-
-  // Build unique owners mention line
-  const ownerMentions = unique_owners.map(id => `<@${id}>`).join(', ');
-  const allOwnersMention = ownerMentions || 'No owners could be resolved';
-
-  // Build release cut owner mention
-  const releaseCutOwnerMention = release_cut_owner_slack_id
-    ? `<@${release_cut_owner_slack_id}>`
-    : process.env.GITHUB_ACTOR || 'Release cut owner';
-
-  const payload = {
-    channel: CHANNEL_ID,
-    text: ':busts_in_silhouette: Conflict Owners — Action Required',
-    blocks: [
-      {
-        type: 'header',
-        text: {
-          type: 'plain_text',
-          text: ':busts_in_silhouette: Conflict Owners — Action Required',
-          emoji: true
-        }
-      },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `The following files have merge conflicts in the back-merge pull request. Each file shows the last person who modified it on both branches.`
-        }
-      },
-      {
-        type: 'divider'
-      },
-      ...fileBlocks,
-      {
-        type: 'divider'
-      },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `*All File Owners*\n${allOwnersMention}`
-        }
-      },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `*Release Cut Owner*\n${releaseCutOwnerMention}`
-        }
-      },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: '*Required Action*\n• Review the conflicting files listed above\n• Coordinate with the file owners to resolve conflicts\n• Resolve conflicts in the pull request\n• Merge the PR into `develop`'
-        }
-      },
-      {
-        type: 'actions',
-        elements: [
-          {
-            type: 'button',
-            text: {
-              type: 'plain_text',
-              text: 'Open Pull Request',
-              emoji: false
-            },
-            url: prUrl,
-            style: 'danger'
-          }
-        ]
-      }
-    ]
-  };
-
-  if (threadTs) {
-    payload.thread_ts = threadTs;
-  }
-
-  return payload;
-}
-
-/**
  * Selects the requested notification type, posts it to Slack, and exports thread metadata.
  *
  * @returns {Promise<void>} Resolves when the Slack notification has been sent.
@@ -757,16 +696,12 @@ async function main() {
       payload = buildBackmergeReply();
       messageType = 'back-merge (thread reply)';
       break;
-    case 'conflict_owners':
-      payload = buildConflictOwnersReply();
-      messageType = 'conflict owners (thread reply)';
-      break;
     case 'summary':
       payload = buildSummaryReply();
       messageType = 'summary (thread reply)';
       break;
     default:
-      console.error(`Unknown NOTIFICATION_TYPE: "${TYPE}". Must be start | backmerge | conflict_owners | summary`);
+      console.error(`Unknown NOTIFICATION_TYPE: "${TYPE}". Must be start | backmerge | summary`);
       process.exit(1);
   }
 
