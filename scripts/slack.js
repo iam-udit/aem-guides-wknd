@@ -96,43 +96,6 @@ function postToSlack(payload) {
 }
 
 /**
- * Generates a progress bar for Slack messages.
- *
- * @param {number} percentage Progress percentage (0-100).
- * @param {number} width Bar width in blocks.
- * @returns {string} Progress bar string using block characters.
- */
-function generateProgressBar(percentage, width = 10) {
-  const filled = Math.round((percentage / 100) * width);
-  const empty = width - filled;
-  return `${'█'.repeat(filled)}${'░'.repeat(empty)} ${percentage}%`;
-}
-
-/**
- * Calculates workflow progress based on completed stages.
- *
- * @returns {object} Progress information with percentage and stage counts.
- */
-function calculateWorkflowProgress() {
-  const stages = [
-    { name: 'Back-merge', result: process.env.BACK_MERGE_RESULT },
-    { name: 'Approval/PR Wait', result: process.env.APPROVAL_RESULT || process.env.AWAIT_PR_RESULT },
-    { name: 'Cut Branch', result: process.env.CUT_BRANCH_RESULT },
-    { name: 'Rotate Tags', result: process.env.ROTATE_TAGS_RESULT },
-    { name: 'Adobe CM', result: process.env.ACM_RESULT },
-    { name: 'Jira Updates', result: process.env.JIRA_RESULT },
-    { name: 'Notify PRs', result: process.env.PRS_RESULT }
-  ];
-
-  const completed = stages.filter(s => s.result === 'success').length;
-  const failed = stages.filter(s => s.result === 'failure' || s.result === 'cancelled').length;
-  const total = stages.length;
-  const percentage = Math.round((completed / total) * 100);
-
-  return { percentage, completed, failed, total, stages };
-}
-
-/**
  * Builds the root Slack thread message posted when the workflow starts.
  *
  * @returns {object} Slack message payload for the workflow start notification.
@@ -142,7 +105,6 @@ function buildStartMessage() {
   const actor = process.env.GITHUB_ACTOR || 'unknown';
   const runNumber = process.env.RUN_NUMBER || '?';
   const release = process.env.NEW_VERSION_LABEL || '';
-  const progressBar = generateProgressBar(0);
 
   return {
     channel: CHANNEL_ID,
@@ -181,14 +143,7 @@ function buildStartMessage() {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*Progress*\n\`${progressBar}\``
-        }
-      },
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: '*Planned Stages*\n⚪ Back-merge previous release into `develop`\n⚪ Cut next release branch\n⚪ Rotate release tags\n⚪ Update Adobe Cloud Manager pipeline\n⚪ Update Jira artifacts\n⚪ Notify open pull requests\n⚪ Publish final summary'
+          text: '*Planned Stages*\n• Back-merge previous release into `develop`\n• Cut next release branch\n• Rotate release tags\n• Update Adobe Cloud Manager pipeline\n• Update Jira artifacts\n• Notify open pull requests\n• Publish final summary'
         }
       },
       {
@@ -515,6 +470,7 @@ function buildSummaryReply() {
   const acm = process.env.ACM_RESULT || 'unknown';
   const acmStatus = process.env.ACM_STATUS || acm;
   const acmError = process.env.ACM_ERROR_MESSAGE || '';
+  const acmPipelineUrl = process.env.ACM_PIPELINE_URL || '';
   const backMerge = process.env.BACK_MERGE_RESULT || 'unknown';
   const approval = process.env.APPROVAL_RESULT || 'unknown';
   const awaitPr = process.env.AWAIT_PR_RESULT || 'unknown';
@@ -621,14 +577,12 @@ function buildSummaryReply() {
   const coreSuccess = jira === 'success' && prs === 'success';
   const acmFailed = acmStatus !== 'success';
   const failureReasons = buildFailureReasons();
-  
-  // Calculate progress for summary
-  const progress = calculateWorkflowProgress();
-  const progressBar = generateProgressBar(progress.percentage);
 
   const acmStatusText = acmFailed
     ? `*Adobe Cloud Manager* (Optional)\n• Status: ${describeResult(acmStatus, 'Success', 'Failed', 'Cancelled', 'Skipped')}\n• ${acmError || 'Check workflow logs for details'}\n• Action: Update pipeline branch and trigger build manually in Cloud Manager`
-    : `*Adobe Cloud Manager*\n• Pipeline branch updated to \`${newBranch}\`\n• Stage pipeline triggered successfully`;
+    : acmPipelineUrl
+      ? `*Adobe Cloud Manager*\n• Pipeline branch updated to \`${newBranch}\`\n• Stage pipeline triggered successfully\n• <${acmPipelineUrl}|View Pipeline Execution>`
+      : `*Adobe Cloud Manager*\n• Pipeline branch updated to \`${newBranch}\`\n• Stage pipeline triggered successfully`;
 
   const payload = coreSuccess
     ? {

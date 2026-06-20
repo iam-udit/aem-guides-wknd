@@ -613,6 +613,7 @@ jobs:
     outputs:
       status: ${{ steps.set_status.outputs.status }}
       error_message: ${{ steps.set_status.outputs.error_message }}
+      pipeline_url: ${{ steps.set_status.outputs.pipeline_url }}
 
     steps:
       - name: Get Adobe IMS access token
@@ -696,20 +697,46 @@ jobs:
           fi
 
       - name: Trigger stage pipeline execution
+        id: trigger_pipeline
         if: steps.patch_pipeline.outcome == 'success'
         run: |
           [ "$DRY_RUN" = "true" ] && echo "[DRY RUN] Would trigger stage build" && exit 0
 
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution" \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
             -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
             -H "Content-Type: application/json")
 
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
           echo "Pipeline trigger → HTTP $HTTP_CODE"
           if [ "$HTTP_CODE" = "201" ]; then
             echo "✅ Stage pipeline triggered successfully"
+            
+            # Extract execution ID from response to build pipeline URL
+            EXECUTION_ID=$(echo "$BODY" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+              try {
+                const parsed = JSON.parse(d);
+                if (parsed.id) {
+                  console.log(parsed.id);
+                } else {
+                  console.error('No execution ID in response');
+                }
+              } catch(e) {
+                console.error('Failed to parse execution response');
+              }
+            })" || echo "")
+            
+            if [ -n "$EXECUTION_ID" ]; then
+              PIPELINE_URL="https://experience.adobe.com/#/@${{ vars.ACM_ORG_ID }}/cloud-manager/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution/$EXECUTION_ID"
+              echo "pipeline_url=$PIPELINE_URL" >> "$GITHUB_OUTPUT"
+              echo "Pipeline execution URL: $PIPELINE_URL"
+            else
+              echo "::warning::Could not extract execution ID from response"
+            fi
           else
             echo "::error::Trigger returned $HTTP_CODE — pipeline execution failed to start"
             exit 1
@@ -722,6 +749,7 @@ jobs:
           if [ "${{ job.status }}" = "success" ]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
             echo "error_message=" >> "$GITHUB_OUTPUT"
+            echo "pipeline_url=${{ steps.trigger_pipeline.outputs.pipeline_url }}" >> "$GITHUB_OUTPUT"
             echo "✅ ACM operations completed successfully"
           else
             echo "status=failed" >> "$GITHUB_OUTPUT"
@@ -818,15 +846,16 @@ jobs:
 
 # ============================================================
 # JOB 6 — Notify open PRs targeting develop
-# Waits for BOTH Job 4 (ACM) and Job 5 (Jira) to complete
+# Runs in PARALLEL with Jobs 4 (ACM) and 5 (Jira)
+# Only needs release metadata from Job 3
 # ============================================================
   notify_open_prs:
     name: "6 · Notify open PRs"
     runs-on: ubuntu-latest
-    needs: [derive_release_metadata, jira_release, adobe_cloud_manager]
+    needs: [derive_release_metadata, rotate_tags]
     if: |
       !cancelled() &&
-      needs.jira_release.result == 'success'
+      needs.rotate_tags.result == 'success'
 
     steps:
       - name: Checkout
@@ -853,6 +882,7 @@ jobs:
 
 # ============================================================
 # JOB 7 — Final Slack summary
+# Waits for ALL parallel jobs (4, 5, 6) to complete
 # ============================================================
   notify_slack_final:
     name: "7 · Slack summary"
@@ -922,6 +952,7 @@ jobs:
           ACM_RESULT:           ${{ needs.adobe_cloud_manager.result }}
           ACM_STATUS:           ${{ needs.adobe_cloud_manager.outputs.status }}
           ACM_ERROR_MESSAGE:    ${{ needs.adobe_cloud_manager.outputs.error_message }}
+          ACM_PIPELINE_URL:     ${{ needs.adobe_cloud_manager.outputs.pipeline_url }}
           JIRA_RESULT:          ${{ needs.jira_release.result }}
           PRS_RESULT:           ${{ needs.notify_open_prs.result }}
           GITHUB_ACTOR:         ${{ github.actor }}
