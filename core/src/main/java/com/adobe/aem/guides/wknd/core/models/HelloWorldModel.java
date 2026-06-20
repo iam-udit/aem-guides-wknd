@@ -63,6 +63,7 @@ public class HelloWorldModel {
 
     /**
      * Test changes for the jira ticket: ADCMS-3 - Sling Model - @ValueMapValue annotation
+     * Changes from develop to have merge conflict case
      */
     public String getMessage() {
         return message;
