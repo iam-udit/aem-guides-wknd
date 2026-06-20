@@ -759,6 +759,7 @@ function buildSummaryReply() {
   }
 
   return payload;
+}
 
 /**
  * Builds the Slack message for rollback workflow start.
@@ -1032,7 +1033,6 @@ function buildRollbackSummaryReply() {
   }
 
   return payload;
-}
 }
 
 /**

@@ -29,6 +29,10 @@ on:
         description: "Previous release branch to restore (e.g. release-2.02.0-loki)"
         required: true
         type: string
+      jira_fix_version:
+        description: "Jira fix version label (e.g. AEM 2.03.0 - Minotaur)"
+        required: true
+        type: string
       jira_release_ticket:
         description: "Jira release ticket key (e.g. ADCMS-9999)"
         required: true
@@ -41,6 +45,7 @@ on:
 env:
   RELEASE_BRANCH_TO_DELETE: "${{ inputs.release_branch_to_delete }}"
   PREVIOUS_RELEASE_BRANCH: "${{ inputs.previous_release_branch }}"
+  JIRA_FIX_VERSION: "${{ inputs.jira_fix_version }}"
   JIRA_RELEASE_TICKET: "${{ inputs.jira_release_ticket }}"
   ROLLBACK_REASON: "${{ inputs.reason }}"
 
@@ -139,7 +144,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
           NOTIFICATION_TYPE: rollback_start
-          NEW_VERSION_LABEL: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}
+          NEW_VERSION_LABEL: ${{ env.JIRA_FIX_VERSION }}
           ROLLBACK_REASON: ${{ env.ROLLBACK_REASON }}
           GITHUB_ACTOR: ${{ github.actor }}
           RUN_NUMBER: ${{ github.run_number }}
@@ -342,7 +347,7 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY: ${{ vars.JIRA_PROJECT_KEY }}
           JIRA_RELEASE_TICKET: ${{ env.JIRA_RELEASE_TICKET }}
-          NEW_VERSION_LABEL: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}
+          NEW_VERSION_LABEL: ${{ env.JIRA_FIX_VERSION }}
           ROLLBACK_REASON: ${{ env.ROLLBACK_REASON }}
           GITHUB_ACTOR: ${{ github.actor }}
 
@@ -368,7 +373,7 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RELEASE_BRANCH_TO_DELETE: ${{ env.RELEASE_BRANCH_TO_DELETE }}
-          NEW_VERSION_LABEL: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}
+          NEW_VERSION_LABEL: ${{ env.JIRA_FIX_VERSION }}
           ROLLBACK_REASON: ${{ env.ROLLBACK_REASON }}
 
 
@@ -393,7 +398,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
           NOTIFICATION_TYPE: rollback_summary
-          NEW_VERSION_LABEL: ${{ needs.derive_rollback_metadata.outputs.new_version_label }}
+          NEW_VERSION_LABEL: ${{ env.JIRA_FIX_VERSION }}
           RELEASE_BRANCH_TO_DELETE: ${{ env.RELEASE_BRANCH_TO_DELETE }}
           PREVIOUS_RELEASE_BRANCH: ${{ env.PREVIOUS_RELEASE_BRANCH }}
           ROLLBACK_REASON: ${{ env.ROLLBACK_REASON }}

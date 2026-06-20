@@ -641,6 +641,7 @@ The rollback workflow safely undoes a release cut by reverting all changes made 
 |-------|---------|-------------|
 | Release branch to delete | `release-2.03.0-minotaur` | The branch created by release cut |
 | Previous release branch | `release-2.02.0-loki` | The branch to restore to |
+| Jira fix version label | `AEM 2.03.0 - Minotaur` | The exact Jira fix version label used in the release |
 | Jira release ticket | `ADCMS-9999` | Release ticket key |
 | Reason for rollback | `Critical bug found in build` | Why rollback is needed |
 
