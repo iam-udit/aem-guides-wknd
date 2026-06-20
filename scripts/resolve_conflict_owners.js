@@ -120,11 +120,10 @@ function lookupSlackUserByEmail(email) {
       res.on('end', () => {
         try {
           const response = JSON.parse(data);
-          console.log(`      Slack API response for ${email}:`, JSON.stringify(response, null, 2));
           if (response.ok && response.user) {
             resolve(response.user);
           } else {
-            console.log(`      Slack lookup failed: ${response.error || 'user not found'}`);
+            console.log(`      Slack lookup failed for ${email}: ${response.error || 'user not found'}`);
             resolve(null);
           }
         } catch (err) {
@@ -275,7 +274,6 @@ async function main() {
   try {
     // Try to get the GitHub user's email
     const actorData = await ghRequest('GET', `/users/${GITHUB_ACTOR}`);
-    console.log(`  GitHub user data:`, JSON.stringify(actorData, null, 2));
     
     if (actorData.email) {
       console.log(`  Attempting Slack lookup for: ${actorData.email}`);
