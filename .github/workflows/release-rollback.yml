@@ -503,21 +503,6 @@ jobs:
             echo "❌ ACM operations failed"
           fi
 
-      - name: Original set status placeholder
-        id: set_status
-        if: always()
-        run: |
-          if [ "${{ steps.check_cancel.outputs.pipeline_busy }}" = "true" ]; then
-            echo "status=skipped_busy" >> "$GITHUB_OUTPUT"
-            echo "⚠️  ACM operations skipped - pipeline was busy"
-          elif [ "${{ job.status }}" = "success" ]; then
-            echo "status=success" >> "$GITHUB_OUTPUT"
-            echo "✅ ACM operations completed successfully"
-          else
-            echo "status=failed" >> "$GITHUB_OUTPUT"
-            echo "❌ ACM operations failed"
-          fi
-
 
 # ============================================================
 # JOB 4 — Cleanup Jira artifacts
