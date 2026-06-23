@@ -156,6 +156,9 @@ async function closeBackMergePR() {
  */
 async function deleteBotComments() {
   console.log(`\n[PR Rollback] Searching for bot comments about ${VERSION_LABEL}`);
+  console.log(`  DEBUG: NEW_VERSION_LABEL env var = "${process.env.NEW_VERSION_LABEL}"`);
+  console.log(`  DEBUG: VERSION_LABEL constant = "${VERSION_LABEL}"`);
+  console.log(`  DEBUG: RELEASE_BRANCH constant = "${RELEASE_BRANCH}"`);
   
   try {
     // Get all open PRs targeting develop
@@ -166,19 +169,40 @@ async function deleteBotComments() {
     let deletedCount = 0;
     
     for (const pr of prs) {
-      const { number } = pr;
+      const { number, title } = pr;
+      
+      console.log(`\n  Checking PR #${number}: "${title}"`);
       
       try {
         // Get all comments on this PR
         const comments = await ghRequest('GET', `/repos/${REPO}/issues/${number}/comments`);
+        
+        console.log(`    Total comments: ${comments.length}`);
         
         // Find bot comments that mention this release
         const botComments = comments.filter(comment => {
           const body = comment.body || '';
           const isBot = comment.user?.login === 'github-actions[bot]' ||
                         comment.user?.type === 'Bot';
-          const mentionsRelease = body.includes(VERSION_LABEL) || 
-                                  body.includes(RELEASE_BRANCH);
+          
+          // Check for version label (with or without markdown bold)
+          const mentionsVersionLabel = body.includes(VERSION_LABEL);
+          // Also check for version label wrapped in markdown bold
+          const mentionsVersionLabelBold = body.includes(`**${VERSION_LABEL}**`);
+          // Check for release branch
+          const mentionsReleaseBranch = body.includes(RELEASE_BRANCH);
+          
+          const mentionsRelease = mentionsVersionLabel || mentionsVersionLabelBold || mentionsReleaseBranch;
+          
+          if (isBot) {
+            console.log(`      Comment ${comment.id} is from bot: ${comment.user?.login}`);
+            console.log(`        Comment preview: ${body.substring(0, 150)}...`);
+            console.log(`        Mentions VERSION_LABEL ("${VERSION_LABEL}"): ${mentionsVersionLabel}`);
+            console.log(`        Mentions VERSION_LABEL bold ("**${VERSION_LABEL}**"): ${mentionsVersionLabelBold}`);
+            console.log(`        Mentions RELEASE_BRANCH ("${RELEASE_BRANCH}"): ${mentionsReleaseBranch}`);
+            console.log(`        Will delete: ${mentionsRelease}`);
+          }
+          
           return isBot && mentionsRelease;
         });
         

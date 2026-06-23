@@ -919,14 +919,14 @@ function buildRollbackSummaryReply() {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Actions Completed*\n• Deleted release branch: \`${releaseBranch}\`\n• Deleted pre-release tag\n• Restored previous pre-release tag\n• Reverted to branch: \`${prevBranch}\`\n• Deleted Jira filter\n• Added rollback comment to release ticket\n• Closed back-merge PR (if it was open)\n• Deleted bot comments from notified PRs`
+              text: `*Actions Completed*\n• Deleted release branch: \`${releaseBranch}\`\n• Deleted new pre-release tag (e.g., 2.03.0-beta)\n• Deleted previous latest tag (e.g., 2.02.0) created during release cut\n• Restored previous pre-release tag (e.g., 2.02.0-beta)\n• Reverted to branch: \`${prevBranch}\`\n• Deleted Jira filter for rolled-back release\n• Cleared release ticket description\n• Added rollback comment to release ticket\n• Closed back-merge PR (if it was open)\n• Deleted bot comments from notified PRs`
             }
           },
           ...(acmFailed ? [{
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Adobe Cloud Manager* (Optional)\n• Status: Failed\n• Action: Manually revert pipeline to \`${prevBranch}\` in Cloud Manager`
+              text: `*Adobe Cloud Manager* (Optional)\n• Status: Failed\n• Action: Manually cancel running pipeline, revert to \`${prevBranch}\`, and trigger new build in Cloud Manager`
             }
           }, {
             type: 'section',
@@ -938,7 +938,7 @@ function buildRollbackSummaryReply() {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Adobe Cloud Manager*\n• Pipeline reverted to \`${prevBranch}\``
+              text: `*Adobe Cloud Manager*\n• Cancelled running pipeline execution (if using rolled-back branch)\n• Pipeline reverted to \`${prevBranch}\`\n• New pipeline build triggered with \`${prevBranch}\``
             }
           }]),
           {

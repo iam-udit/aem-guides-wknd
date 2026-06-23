@@ -100,14 +100,26 @@ function request(method, path, body) {
  */
 async function findReleaseFilter() {
   console.log(`\n[Jira Rollback] Searching for filter: "${VERSION_LABEL}"`);
+  console.log(`  DEBUG: NEW_VERSION_LABEL env var = "${process.env.NEW_VERSION_LABEL}"`);
+  console.log(`  DEBUG: VERSION_LABEL constant = "${VERSION_LABEL}"`);
   
   try {
     // Search for filters owned by the current user with matching name
-    const filters = await request('GET', `filter/search?filterName=${encodeURIComponent(VERSION_LABEL)}`);
+    const searchUrl = `filter/search?filterName=${encodeURIComponent(VERSION_LABEL)}`;
+    console.log(`  DEBUG: Search URL: ${searchUrl}`);
+    
+    const filters = await request('GET', searchUrl);
+    
+    console.log(`  DEBUG: API Response:`, JSON.stringify(filters, null, 2));
     
     if (filters.values && filters.values.length > 0) {
+      console.log(`  Found ${filters.values.length} filter(s):`);
+      filters.values.forEach((f, i) => {
+        console.log(`    ${i + 1}. ${f.name} (ID: ${f.id})`);
+      });
+      
       const filter = filters.values[0];
-      console.log(`  Found filter: ${filter.name} (ID: ${filter.id})`);
+      console.log(`  Using first filter: ${filter.name} (ID: ${filter.id})`);
       return filter.id;
     }
     
