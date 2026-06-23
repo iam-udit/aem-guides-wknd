@@ -113,14 +113,22 @@ async function findReleaseFilter() {
     console.log(`  DEBUG: API Response:`, JSON.stringify(filters, null, 2));
     
     if (filters.values && filters.values.length > 0) {
-      console.log(`  Found ${filters.values.length} filter(s):`);
+      console.log(`  Found ${filters.values.length} filter(s) from API:`);
       filters.values.forEach((f, i) => {
-        console.log(`    ${i + 1}. ${f.name} (ID: ${f.id})`);
+        console.log(`    ${i + 1}. "${f.name}" (ID: ${f.id})`);
       });
       
-      const filter = filters.values[0];
-      console.log(`  Using first filter: ${filter.name} (ID: ${filter.id})`);
-      return filter.id;
+      // Jira API does fuzzy matching - we need exact match validation
+      const exactMatch = filters.values.find(f => f.name === VERSION_LABEL);
+      
+      if (exactMatch) {
+        console.log(`  ✓ Found exact match: "${exactMatch.name}" (ID: ${exactMatch.id})`);
+        return exactMatch.id;
+      } else {
+        console.log(`  ✗ No exact match found for "${VERSION_LABEL}"`);
+        console.log(`  API returned similar filters, but none match exactly`);
+        return null;
+      }
     }
     
     console.log(`  No filter found with name: "${VERSION_LABEL}"`);

@@ -179,6 +179,13 @@ async function deleteBotComments() {
         
         console.log(`    Total comments: ${comments.length}`);
         
+        // Check each comment in detail
+        comments.forEach((comment, idx) => {
+          console.log(`    Comment ${idx + 1} (ID: ${comment.id}):`);
+          console.log(`      Author: ${comment.user?.login} (Type: ${comment.user?.type})`);
+          console.log(`      Preview: ${(comment.body || '').substring(0, 100)}...`);
+        });
+        
         // Find bot comments that mention this release
         const botComments = comments.filter(comment => {
           const body = comment.body || '';

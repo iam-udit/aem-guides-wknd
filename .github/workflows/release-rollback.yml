@@ -405,24 +405,40 @@ jobs:
       - name: Revert pipeline branch to previous release
         run: |
           # Fetch current pipeline configuration
+          echo "Fetching current pipeline configuration..."
           PIPELINE=$(curl -s \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
             -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}")
 
+          echo "Current pipeline config received"
+
           # Update branch in BUILD phase to previous release
           UPDATED=$(echo "$PIPELINE" | node -e "
             let d=''; process.stdin.on('data',c=>d+=c).on('end',()=>{
               try {
                 const p = JSON.parse(d);
-                if (!p.phases) process.exit(1);
+                if (!p.phases) {
+                  console.error('No phases found in pipeline config');
+                  process.exit(1);
+                }
                 p.phases.forEach(ph=>{ if(ph.type==='BUILD') ph.branch='${{ env.PREVIOUS_RELEASE_BRANCH }}'; });
                 console.log(JSON.stringify(p));
-              } catch(e) { process.exit(1); }
+              } catch(e) {
+                console.error('Failed to parse pipeline config:', e.message);
+                process.exit(1);
+              }
             })")
 
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+          if [ -z "$UPDATED" ]; then
+            echo "::error::Failed to update pipeline configuration"
+            exit 1
+          fi
+
+          echo "Sending PATCH request to update pipeline branch..."
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
             "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}" \
             -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
             -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
@@ -430,10 +446,17 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$UPDATED")
 
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "Response HTTP Code: $HTTP_CODE"
+
           if [ "$HTTP_CODE" = "200" ]; then
             echo "✅ ACM pipeline reverted to ${{ env.PREVIOUS_RELEASE_BRANCH }}"
           else
             echo "::error::Failed to revert ACM pipeline (HTTP $HTTP_CODE)"
+            echo "::error::Response body: $BODY"
+            echo "Note: ACM is optional - rollback will continue"
             exit 1
           fi
 
