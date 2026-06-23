@@ -623,13 +623,6 @@ function buildSummaryReply() {
             ]
           },
           {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*Final Progress*\n\`${progressBar}\`\n${progress.completed}/${progress.total} stages completed${progress.failed > 0 ? ` (${progress.failed} failed)` : ''}`
-            }
-          },
-          {
             type: 'divider'
           },
           {
