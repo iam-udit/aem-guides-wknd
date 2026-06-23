@@ -810,7 +810,7 @@ function buildRollbackStartMessage() {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: '*Planned Actions*\n• Delete release branch\n• Delete pre-release tag\n• Restore previous pre-release tag\n• Revert Adobe Cloud Manager pipeline\n• Delete Jira filter\n• Add rollback comment to release ticket\n• Close back-merge PR (if open)\n• Delete bot comments from notified PRs'
+          text: '*Planned Actions*\n• Delete release branch\n• Delete pre-release tag\n• Delete previous latest tag\n• Restore previous pre-release tag\n• Cancel running ACM pipeline (if applicable)\n• Revert Adobe Cloud Manager pipeline\n• Trigger new ACM pipeline execution\n• Delete Jira filter\n• Clear release ticket description\n• Add rollback comment to release ticket\n• Close back-merge PR (if open)\n• Delete bot comments from notified PRs'
         }
       },
       {
