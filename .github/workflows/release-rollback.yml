@@ -16,7 +16,7 @@
 # Safety: Requires manual approval before executing rollback
 # ============================================================
 
-name: Release Rollback
+name: IBM CMS Release Rollback
 
 on:
   workflow_dispatch:
