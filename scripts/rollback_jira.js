@@ -104,35 +104,65 @@ async function findReleaseFilter() {
   console.log(`  DEBUG: VERSION_LABEL constant = "${VERSION_LABEL}"`);
   
   try {
-    // Search for filters owned by the current user with matching name
-    const searchUrl = `filter/search?filterName=${encodeURIComponent(VERSION_LABEL)}`;
-    console.log(`  DEBUG: Search URL: ${searchUrl}`);
+    // Jira's filterName parameter does fuzzy matching, so we need to:
+    // 1. Get ALL filters (or use a broader search)
+    // 2. Filter client-side for exact match
     
-    const filters = await request('GET', searchUrl);
+    console.log(`  Fetching all filters to find exact match...`);
     
-    console.log(`  DEBUG: API Response:`, JSON.stringify(filters, null, 2));
+    let allFilters = [];
+    let startAt = 0;
+    const maxResults = 50;
     
-    if (filters.values && filters.values.length > 0) {
-      console.log(`  Found ${filters.values.length} filter(s) from API:`);
-      filters.values.forEach((f, i) => {
-        console.log(`    ${i + 1}. "${f.name}" (ID: ${f.id})`);
-      });
+    // Paginate through all filters
+    while (true) {
+      const searchUrl = `filter/search?maxResults=${maxResults}&startAt=${startAt}`;
+      console.log(`  DEBUG: Fetching page: ${searchUrl}`);
       
-      // Jira API does fuzzy matching - we need exact match validation
-      const exactMatch = filters.values.find(f => f.name === VERSION_LABEL);
+      const response = await request('GET', searchUrl);
       
-      if (exactMatch) {
-        console.log(`  ✓ Found exact match: "${exactMatch.name}" (ID: ${exactMatch.id})`);
-        return exactMatch.id;
+      if (response.values && response.values.length > 0) {
+        allFilters.push(...response.values);
+        console.log(`  Fetched ${response.values.length} filters (total so far: ${allFilters.length})`);
+        
+        // Check if we've reached the end
+        if (response.isLast || response.values.length < maxResults) {
+          break;
+        }
+        
+        startAt += maxResults;
       } else {
-        console.log(`  ✗ No exact match found for "${VERSION_LABEL}"`);
-        console.log(`  API returned similar filters, but none match exactly`);
-        return null;
+        break;
       }
     }
     
-    console.log(`  No filter found with name: "${VERSION_LABEL}"`);
-    return null;
+    console.log(`  Total filters fetched: ${allFilters.length}`);
+    console.log(`  Searching for exact match: "${VERSION_LABEL}"`);
+    
+    // Find exact match
+    const exactMatch = allFilters.find(f => f.name === VERSION_LABEL);
+    
+    if (exactMatch) {
+      console.log(`  ✓ Found exact match: "${exactMatch.name}" (ID: ${exactMatch.id})`);
+      return exactMatch.id;
+    } else {
+      console.log(`  ✗ No exact match found for "${VERSION_LABEL}"`);
+      
+      // Show similar filters for debugging
+      const similar = allFilters.filter(f =>
+        f.name.toLowerCase().includes('aem') ||
+        f.name.toLowerCase().includes(VERSION_LABEL.toLowerCase().split(' ')[0])
+      ).slice(0, 5);
+      
+      if (similar.length > 0) {
+        console.log(`  Similar filters found:`);
+        similar.forEach((f, idx) => {
+          console.log(`    ${idx + 1}. "${f.name}" (ID: ${f.id})`);
+        });
+      }
+      
+      return null;
+    }
   } catch (err) {
     console.warn(`  Could not search for filter: ${err.message}`);
     return null;

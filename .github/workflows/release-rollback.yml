@@ -289,6 +289,7 @@ jobs:
     needs: [derive_rollback_metadata, delete_branch_and_tags]
     outputs:
       status: ${{ steps.set_status.outputs.status }}
+      pipeline_busy: ${{ steps.check_cancel.outputs.pipeline_busy }}
 
     steps:
       - name: Get Adobe IMS access token
@@ -319,7 +320,7 @@ jobs:
           echo "acm_token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Check and cancel running pipeline execution
-        id: cancel_pipeline
+        id: check_cancel
         run: |
           echo "Checking for running pipeline executions..."
           RELEASE_BRANCH_TO_DELETE="${{ env.RELEASE_BRANCH_TO_DELETE }}"
@@ -380,29 +381,18 @@ jobs:
           })")
           
           if [ "$STATUS" != "NONE" ]; then
-            echo "Found running execution with status: $STATUS"
-            echo "Cancelling execution running with $RELEASE_BRANCH_TO_DELETE..."
-            
-            # Cancel the execution
-            CANCEL_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
-              "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution/cancel" \
-              -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
-              -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
-              -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
-              -H "Content-Type: application/json")
-            
-            HTTP_CODE=$(echo "$CANCEL_RESPONSE" | tail -n1)
-            
-            if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Pipeline execution cancelled successfully"
-            else
-              echo "⚠️  Could not cancel pipeline (HTTP $HTTP_CODE) - may have already completed"
-            fi
+            echo "⚠️  Found running execution with status: $STATUS"
+            echo "Pipeline is currently running with $RELEASE_BRANCH_TO_DELETE"
+            echo "Skipping ACM operations - pipeline will need manual intervention"
+            echo "pipeline_busy=true" >> "$GITHUB_OUTPUT"
+            exit 0
           else
-            echo "✅ No running pipeline execution found"
+            echo "✅ No running pipeline execution found - safe to proceed"
+            echo "pipeline_busy=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Revert pipeline branch to previous release
+        if: steps.check_cancel.outputs.pipeline_busy != 'true'
         run: |
           # Fetch current pipeline configuration
           echo "Fetching current pipeline configuration..."
@@ -462,6 +452,7 @@ jobs:
 
       - name: Trigger pipeline execution with previous release branch
         id: trigger_pipeline
+        if: steps.check_cancel.outputs.pipeline_busy != 'true' && steps.patch_pipeline.outcome == 'success'
         run: |
           echo "Triggering pipeline execution with ${{ env.PREVIOUS_RELEASE_BRANCH }}..."
           
@@ -501,10 +492,30 @@ jobs:
         id: set_status
         if: always()
         run: |
-          if [ "${{ job.status }}" = "success" ]; then
+          if [ "${{ steps.check_cancel.outputs.pipeline_busy }}" = "true" ]; then
+            echo "status=skipped_busy" >> "$GITHUB_OUTPUT"
+            echo "⚠️  ACM operations skipped - pipeline was busy"
+          elif [ "${{ job.status }}" = "success" ]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
+            echo "✅ ACM operations completed successfully"
           else
             echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "❌ ACM operations failed"
+          fi
+
+      - name: Original set status placeholder
+        id: set_status
+        if: always()
+        run: |
+          if [ "${{ steps.check_cancel.outputs.pipeline_busy }}" = "true" ]; then
+            echo "status=skipped_busy" >> "$GITHUB_OUTPUT"
+            echo "⚠️  ACM operations skipped - pipeline was busy"
+          elif [ "${{ job.status }}" = "success" ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            echo "✅ ACM operations completed successfully"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            echo "❌ ACM operations failed"
           fi
 
 
