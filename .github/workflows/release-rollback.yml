@@ -221,6 +221,45 @@ jobs:
           git push origin ":refs/tags/$TAG" 2>/dev/null || echo "⚠️  Tag not found: $TAG"
           echo "✅ Deleted pre-release tag: $TAG"
 
+      - name: Delete previous latest tag and release (created during release cut)
+        run: |
+          TAG="${{ needs.derive_rollback_metadata.outputs.prev_version }}"
+          PREV_BRANCH="${{ env.PREVIOUS_RELEASE_BRANCH }}"
+          
+          echo "Checking if tag $TAG exists and points to $PREV_BRANCH..."
+          
+          # Check if tag exists
+          if ! git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "⚠️  Tag $TAG not found - may have been deleted already"
+            exit 0
+          fi
+          
+          # Fetch the tag to check which branch it points to
+          git fetch origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
+          
+          # Get the commit SHA that the tag points to
+          TAG_COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || echo "")
+          
+          if [ -z "$TAG_COMMIT" ]; then
+            echo "⚠️  Could not determine commit for tag $TAG"
+            exit 0
+          fi
+          
+          # Check if this commit exists in the previous release branch
+          git fetch origin "$PREV_BRANCH" 2>/dev/null || true
+          
+          if git merge-base --is-ancestor "$TAG_COMMIT" "origin/$PREV_BRANCH" 2>/dev/null; then
+            echo "✅ Verified: Tag $TAG points to a commit in $PREV_BRANCH"
+            echo "Deleting latest tag: $TAG (created during release cut)"
+            gh release delete "$TAG" --yes 2>/dev/null || echo "⚠️  Release not found: $TAG"
+            git push origin ":refs/tags/$TAG" 2>/dev/null || echo "⚠️  Could not delete tag: $TAG"
+            echo "✅ Deleted latest tag: $TAG"
+          else
+            echo "⚠️  Safety check failed: Tag $TAG does not point to $PREV_BRANCH"
+            echo "⚠️  Skipping deletion to prevent data loss"
+            exit 0
+          fi
+
       - name: Restore previous pre-release tag
         run: |
           TAG="${{ needs.derive_rollback_metadata.outputs.prev_prerelease_tag }}"
@@ -279,6 +318,90 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "acm_token=$TOKEN" >> "$GITHUB_OUTPUT"
 
+      - name: Check and cancel running pipeline execution
+        id: cancel_pipeline
+        run: |
+          echo "Checking for running pipeline executions..."
+          RELEASE_BRANCH_TO_DELETE="${{ env.RELEASE_BRANCH_TO_DELETE }}"
+          
+          # Get current pipeline configuration to check which branch it's using
+          PIPELINE=$(curl -s \
+            -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+            -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
+            "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}")
+          
+          # Extract the current branch from pipeline config
+          CURRENT_BRANCH=$(echo "$PIPELINE" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+            try {
+              const p = JSON.parse(d);
+              if (p.phases) {
+                const buildPhase = p.phases.find(ph => ph.type === 'BUILD');
+                if (buildPhase && buildPhase.branch) {
+                  console.log(buildPhase.branch);
+                } else {
+                  console.log('UNKNOWN');
+                }
+              } else {
+                console.log('UNKNOWN');
+              }
+            } catch(e) { console.log('UNKNOWN'); }
+          })")
+          
+          echo "Current pipeline branch: $CURRENT_BRANCH"
+          echo "Branch to rollback: $RELEASE_BRANCH_TO_DELETE"
+          
+          # Only proceed if pipeline is configured with the branch we're rolling back
+          if [ "$CURRENT_BRANCH" != "$RELEASE_BRANCH_TO_DELETE" ]; then
+            echo "✅ Pipeline is not using $RELEASE_BRANCH_TO_DELETE (using $CURRENT_BRANCH)"
+            echo "✅ No cancellation needed"
+            exit 0
+          fi
+          
+          echo "⚠️  Pipeline is configured with $RELEASE_BRANCH_TO_DELETE - checking for running executions..."
+          
+          # Get current pipeline execution
+          EXECUTION=$(curl -s \
+            -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+            -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
+            "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution")
+          
+          # Check if there's a running execution
+          STATUS=$(echo "$EXECUTION" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+            try {
+              const exec = JSON.parse(d);
+              if (exec.status && exec.status !== 'FINISHED' && exec.status !== 'FAILED' && exec.status !== 'CANCELLED') {
+                console.log(exec.status);
+              } else {
+                console.log('NONE');
+              }
+            } catch(e) { console.log('NONE'); }
+          })")
+          
+          if [ "$STATUS" != "NONE" ]; then
+            echo "Found running execution with status: $STATUS"
+            echo "Cancelling execution running with $RELEASE_BRANCH_TO_DELETE..."
+            
+            # Cancel the execution
+            CANCEL_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+              "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution/cancel" \
+              -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+              -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+              -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
+              -H "Content-Type: application/json")
+            
+            HTTP_CODE=$(echo "$CANCEL_RESPONSE" | tail -n1)
+            
+            if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Pipeline execution cancelled successfully"
+            else
+              echo "⚠️  Could not cancel pipeline (HTTP $HTTP_CODE) - may have already completed"
+            fi
+          else
+            echo "✅ No running pipeline execution found"
+          fi
+
       - name: Revert pipeline branch to previous release
         run: |
           # Fetch current pipeline configuration
@@ -312,6 +435,43 @@ jobs:
           else
             echo "::error::Failed to revert ACM pipeline (HTTP $HTTP_CODE)"
             exit 1
+          fi
+
+      - name: Trigger pipeline execution with previous release branch
+        id: trigger_pipeline
+        run: |
+          echo "Triggering pipeline execution with ${{ env.PREVIOUS_RELEASE_BRANCH }}..."
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+            "https://cloudmanager.adobe.io/api/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution" \
+            -H "Authorization: Bearer ${{ steps.acm_auth.outputs.acm_token }}" \
+            -H "x-gw-ims-org-id: ${{ vars.ACM_ORG_ID }}" \
+            -H "x-api-key: ${{ vars.ACM_CLIENT_ID }}" \
+            -H "Content-Type: application/json")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "Pipeline trigger → HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ Stage pipeline triggered successfully with ${{ env.PREVIOUS_RELEASE_BRANCH }}"
+            
+            # Extract execution ID from response
+            EXECUTION_ID=$(echo "$BODY" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+              try {
+                const parsed = JSON.parse(d);
+                if (parsed.id) {
+                  console.log(parsed.id);
+                }
+              } catch(e) { }
+            })" || echo "")
+            
+            if [ -n "$EXECUTION_ID" ]; then
+              PIPELINE_URL="https://experience.adobe.com/#/@${{ vars.ACM_ORG_ID }}/cloud-manager/program/${{ vars.ACM_PROGRAM_ID }}/pipeline/${{ vars.ACM_PIPELINE_ID }}/execution/$EXECUTION_ID"
+              echo "Pipeline execution URL: $PIPELINE_URL"
+            fi
+          else
+            echo "⚠️  Pipeline trigger returned $HTTP_CODE - may need manual trigger"
           fi
 
       - name: Set ACM status

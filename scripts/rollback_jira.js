@@ -137,6 +137,37 @@ async function deleteFilter(filterId) {
 }
 
 /**
+ * Clears the release ticket description.
+ *
+ * @returns {Promise<void>} Resolves when description is cleared.
+ */
+async function clearReleaseTicketDescription() {
+  console.log(`\n[Jira Rollback] Clearing description for ${RELEASE_KEY}`);
+  
+  const emptyDescription = {
+    type:    'doc',
+    version: 1,
+    content: [{
+      type:    'paragraph',
+      content: [{
+        type: 'text',
+        text: `This release has been rolled back. See comments for details.`,
+      }],
+    }],
+  };
+
+  try {
+    await request('PUT', `issue/${RELEASE_KEY}`, {
+      fields: { description: emptyDescription }
+    });
+    console.log(`  ✅ Release ticket description cleared`);
+  } catch (err) {
+    console.error(`  ❌ Failed to clear description: ${err.message}`);
+    throw err;
+  }
+}
+
+/**
  * Adds a rollback comment to the release ticket.
  *
  * @returns {Promise<void>} Resolves when comment is posted.
@@ -156,10 +187,11 @@ async function addRollbackComment() {
               `Reason: ${REASON}\n\n` +
               `Actions performed:\n` +
               `• Deleted release branch\n` +
-              `• Deleted pre-release tag\n` +
+              `• Deleted pre-release tag and latest tag\n` +
               `• Restored previous pre-release tag\n` +
               `• Reverted Adobe Cloud Manager pipeline\n` +
               `• Deleted Jira filter\n` +
+              `• Cleared release ticket description\n` +
               `• Closed back-merge PR (if open)\n` +
               `• Removed bot comments from notified PRs\n\n` +
               `This release ticket is no longer valid for the current release cycle.`,
@@ -191,6 +223,9 @@ async function main() {
   } else {
     console.log(`  ⚠️  No filter to delete (may have been deleted manually)`);
   }
+  
+  // Clear release ticket description
+  await clearReleaseTicketDescription();
   
   // Add rollback comment to release ticket
   await addRollbackComment();
