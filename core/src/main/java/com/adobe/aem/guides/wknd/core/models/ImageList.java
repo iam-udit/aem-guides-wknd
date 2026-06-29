@@ -9,6 +9,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Represents the WKND Image List Component
+ * ADCMS-7: Re-factor the ImageList model to use the new data layer API
  */
 public interface ImageList {
 
